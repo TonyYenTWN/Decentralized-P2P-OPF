@@ -27,8 +27,8 @@ price_find <- function(rl, residual_load_curve){
 }
 
 ### Network Parameters
-num_node <- 3
-num_line <- 2
+num_node <- 4
+num_line <- 3
 z_img <- .01
 Cond = diag(rep(1 / z_img, num_line))
 V_limit <- pi / 6
@@ -123,7 +123,7 @@ residual_load_curve <- cumsum_supply - cumsum_demand
 # f(x) + g(w) + .5 * \rho * (a_i^2 x_i^2 + 2 * (b * a_i) %*% x_i + ...)
 # KKT: p(x) + \rho * (a_i^2 x_i + (b * a_i)) = 0
 tol <- 1E-6
-alpha <- .99
+alpha <- 0
 rho <- 1
 sensitivity_x <- c()
 for(var_iter in 1:num_variable){
@@ -136,10 +136,12 @@ boundary <- c(rep(0, num_eq), rep(-V_limit, 2 * num_node), residual_load_curve[1
 u <- rep(0, num_constraints)
 price_margin <- rep(0, num_node)
 
+loop <- 0
 while(TRUE){
   # Update state variables
-  constant <- A %*% x - w - boundary + u # Parallel if this is outside the loop for variables
+  # constant <- A %*% x - w - boundary + u # Parallel if this is outside the loop for variables
   for(var_iter in 1:num_variable){
+    constant <- A %*% x - w - boundary + u # Sequential if this is inside the loop for variables
     constant_temp <- constant - x[var_iter] * A[, var_iter]
     if(var_iter <= num_node || var_iter > 2 * num_node){
       x[var_iter] <- -t(constant_temp) %*% A[, var_iter] / sensitivity_x[var_iter]
@@ -148,10 +150,21 @@ while(TRUE){
       node_ID <- var_iter - num_node
       error <- price + rho * (as.vector(sensitivity_x[var_iter] * residual_load_curve[, node_ID]) + c(t(constant_temp) %*% A[, var_iter]))
       error <- abs(error)
-      price_margin[node_ID] <- price[which.min(error)]
+      price_ID <- which.min(error)
+      price_margin[node_ID] <- price[price_ID]
+      if(price_ID  == 1){
+        x_min <- residual_load_curve[price_ID, node_ID]
+      }
+      else{
+        x_min <- residual_load_curve[price_ID - 1, node_ID]
+      }
+      x_max <- residual_load_curve[price_ID, node_ID]
       x[var_iter] <- (-price_margin[node_ID] / rho - t(constant_temp) %*% A[, var_iter]) / sensitivity_x[var_iter]
-      x[var_iter] <- (x[var_iter] > residual_load_curve[1, node_ID]) * x[var_iter] + (x[var_iter] <= residual_load_curve[1, node_ID]) * residual_load_curve[1, node_ID]
-      x[var_iter] <- (x[var_iter] < residual_load_curve[num_price + 2, node_ID]) * x[var_iter] + (x[var_iter] >= residual_load_curve[num_price + 2, node_ID]) * residual_load_curve[num_price + 2, node_ID]
+      
+      # Check if bid is constrained
+      x[var_iter] <- (x[var_iter] > x_min) * x[var_iter] + (x[var_iter] <= x_min) * x_min
+      x[var_iter] <- (x[var_iter] < x_max) * x[var_iter] + (x[var_iter] >= x_max) * x_max
+      price_margin[node_ID] <- -rho * (sensitivity_x[var_iter] * x[var_iter] + t(constant_temp) %*% A[, var_iter]) 
     }
   }
   x <- x_prev * alpha + x * (1 - alpha)
@@ -170,5 +183,16 @@ while(TRUE){
   dual_error <- c(rep(0, num_node), price_margin, rep(0, num_line)) / rho + t(A) %*% u
   if(max(prime_error^2, dual_error^2) < tol){
     break
+  }
+  
+  if(loop %% 1000 == 0){
+    # print(x[num_node + 1:num_node])
+    print(max(prime_error^2))
+    print(max(dual_error^2))
+    # print(range(x[1:num_node]))
+    # print(range(x[2 * num_node + 1:num_line]))
   }  
+  loop <- loop + 1
 }
+
+print(x[num_node + 1:num_node])
