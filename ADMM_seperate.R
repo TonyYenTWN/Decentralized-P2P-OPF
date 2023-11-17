@@ -1,6 +1,6 @@
 ### Decentralized optimization using ADMM
 ## DC Power Flow Assumption, ignoring reactive power flow
-## Current algorithm is still sequential
+## Convergence guaranteed for sequential method; parallel method needs proof and validation of stabilization method
 
 ## Price finding func for residual load curve
 price_find <- function(rl, residual_load_curve){
@@ -123,11 +123,13 @@ residual_load_curve <- cumsum_supply - cumsum_demand
 # f(x) + g(w) + .5 * \rho * (a_i^2 x_i^2 + 2 * (b * a_i) %*% x_i + ...)
 # KKT: p(x) + \rho * (a_i^2 x_i + (b * a_i)) = 0
 tol <- 1E-6
+alpha <- .99
 rho <- 1
 sensitivity_x <- c()
 for(var_iter in 1:num_variable){
   sensitivity_x[var_iter] <- t(A[, var_iter]) %*% A[, var_iter]
 }
+x_prev <- rep(0, num_variable)
 x <- rep(0, num_variable)
 w <- rep(0, num_constraints)
 boundary <- c(rep(0, num_eq), rep(-V_limit, 2 * num_node), residual_load_curve[1, ], -residual_load_curve[num_price + 2, ], rep(-I_limit, 2 * num_line))
@@ -136,8 +138,8 @@ price_margin <- rep(0, num_node)
 
 while(TRUE){
   # Update state variables
+  constant <- A %*% x - w - boundary + u # Parallel if this is outside the loop for variables
   for(var_iter in 1:num_variable){
-    constant <- A %*% x - w - boundary + u
     constant_temp <- constant - x[var_iter] * A[, var_iter]
     if(var_iter <= num_node || var_iter > 2 * num_node){
       x[var_iter] <- -t(constant_temp) %*% A[, var_iter] / sensitivity_x[var_iter]
@@ -152,6 +154,8 @@ while(TRUE){
       x[var_iter] <- (x[var_iter] < residual_load_curve[num_price + 2, node_ID]) * x[var_iter] + (x[var_iter] >= residual_load_curve[num_price + 2, node_ID]) * residual_load_curve[num_price + 2, node_ID]
     }
   }
+  x <- x_prev * alpha + x * (1 - alpha)
+  x_prev <- x
   
   # Update constraint indicators
   w <- A %*% x - boundary + u
@@ -160,8 +164,6 @@ while(TRUE){
   
   # Update dual variables
   u <- u + A %*% x - w - boundary
-  
-  print(x)
   
   # Check if loop should continue
   prime_error <- A %*% x - w - boundary
