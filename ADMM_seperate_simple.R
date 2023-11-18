@@ -95,12 +95,12 @@ Z_eq <- solve(Y_eq[2:num_node, 2:num_node])
 # L(x, w, u) = f(x) + g(w) + .5 * \rho * ||A %*% x + B %*% w - c + u||^2
 # For symmetric box constraints, c will cancel out when optimizing x
 # x = power source / sink
-# w = box constraint indicator for power balance, voltage, power source / sink, and line current
+# w = box constraint indicator for power balance, voltage, and line current
 # c = boundary of box constraints
 # u = dual variables of the constraints
 # f(x): cost function associated with S (cost function from reference node implicitly incorporated); assume constant at each iteration
 # g(w) = indicator function for the box constraint
-num_box <- 2 * num_node + num_line
+num_box <- num_node + num_line
 num_constraints <- 2 * num_box
 num_variable <- num_node
 A <- matrix(0, nrow = num_constraints, ncol = num_variable)
@@ -123,10 +123,10 @@ constraint_now <- constraint_now + (num_node - 1)
 # Box Constraint for Power Source / Sink
 # S - w_[S, neg] = S_min
 # -S - w_{S, pos} = -S_max
-A[constraint_now + 1:num_node, 1:num_node] <- diag(rep(1, num_node))
-constraint_now <- constraint_now + num_node
-A[constraint_now + 1:num_node, 1:num_node] <- diag(rep(-1, num_node))
-constraint_now <- constraint_now + num_node
+# A[constraint_now + 1:num_node, 1:num_node] <- diag(rep(1, num_node))
+# constraint_now <- constraint_now + num_node
+# A[constraint_now + 1:num_node, 1:num_node] <- diag(rep(-1, num_node))
+# constraint_now <- constraint_now + num_node
 
 # Box Constraint for Line Current
 # (Cond %*% NL)[, 2:num_node] %*% Z_eq %*% S - w_{I, neg} = -I_limit
@@ -179,7 +179,7 @@ for(var_iter in 1:num_variable){
 x <- rep(0, num_variable)
 x_best <- rep(0, num_variable)
 w <- rep(0, num_constraints)
-boundary <- c(0, 0, rep(-V_limit, 2 * (num_node - 1)), rl_boundary[, 1], -rl_boundary[, 2], rep(-I_limit, 2 * num_line))
+boundary <- c(0, 0, rep(-V_limit, 2 * (num_node - 1)), rep(-I_limit, 2 * num_line))
 u <- rep(0, num_constraints)
 price_margin <- rep(0, num_node)
 error_min <- Inf
