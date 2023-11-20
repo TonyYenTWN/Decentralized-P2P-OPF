@@ -35,107 +35,81 @@ namespace ADMM{
 
         // Objective function
         struct obj_struct{
-            struct bid_struct{
-                // Substructures for bids
-                struct bid_mini_struct{
+            struct cost_func_struct{
+                // Structures for bids
+                struct bid_struct{
                     Eigen::VectorXd price;
                     Eigen::VectorXd quantity;
                 };
-                bid_mini_struct demand;
-                bid_mini_struct supply;
+                bid_struct demand;
+                bid_struct supply;
 
                 // Substructure for merit order curve
                 struct moc_struct{
                     Eigen::VectorXd price;
-                    Eigen::VectorXd rl;
+                    Eigen::VectorXd quantity;
                     Eigen::VectorXd obj;
                 };
-                moc_struct moc_rl;
+                moc_struct moc;
 
-                void moc_rl_set(){
+                void moc_set(){
                     int num_row = 2 * (this->demand.price.size() + this->supply.price.size() - 3);
-                    this->moc_rl.price = Eigen::VectorXd(num_row);
-                    this->moc_rl.rl = Eigen::VectorXd(num_row);
-                    this->moc_rl.obj = Eigen::VectorXd(num_row);
+                    this->moc.price = Eigen::VectorXd(num_row);
+                    this->moc.quantity = Eigen::VectorXd(num_row);
+                    this->moc.obj = Eigen::VectorXd(num_row);
 
                     // Initialization for the loop
                     int price_demand_ID = 0;
                     int price_supply_ID = 0;
-                    int price_rl_ID = 0;
+                    int price_ID = 0;
                     double obj_value = -(this->demand.price.segment(1, this->demand.price.size() - 2).array() * this->demand.quantity.segment(1, this->demand.quantity.size() - 2).array()).sum();
 
                     // First item when price = -Inf
-                    this->moc_rl.price(0) = -std::numeric_limits<double>::infinity();
-                    this->moc_rl.rl(0) = -this->demand.quantity.sum();
-                    this->moc_rl.obj(0) = obj_value;
-                    std::cout << moc_rl.price(price_rl_ID) << "\t";
-                    std::cout << moc_rl.rl(price_rl_ID) << "\t";
-                    std::cout << moc_rl.obj(price_rl_ID) << "\t";
-                    std::cout << "\n";
+                    this->moc.price(0) = -std::numeric_limits<double>::infinity();
+                    this->moc.quantity(0) = -this->demand.quantity.sum();
+                    this->moc.obj(0) = obj_value;
 
-                    while(price_rl_ID < num_row - 2){
-                        price_rl_ID += 1;
+                    while(price_ID < num_row - 2){
+                        price_ID += 1;
 
                         // Next demand marginal price lower than supply; add that demand quantity to residual load
                         if(this->demand.price(price_demand_ID + 1) <= this->supply.price(price_supply_ID + 1)){
                             price_demand_ID += price_demand_ID < this->demand.price.size() - 2;
-                            this->moc_rl.price(price_rl_ID) = this->demand.price(price_demand_ID);
-                            this->moc_rl.rl(price_rl_ID) = this->moc_rl.rl(price_rl_ID - 1);
-                            this->moc_rl.obj(price_rl_ID, 2) = obj_value;
-                            std::cout << moc_rl.price(price_rl_ID) << "\t";
-                            std::cout << moc_rl.rl(price_rl_ID) << "\t";
-                            std::cout << moc_rl.obj(price_rl_ID) << "\t";
-                            std::cout << "\n";
+                            this->moc.price(price_ID) = this->demand.price(price_demand_ID);
+                            this->moc.quantity(price_ID) = this->moc.quantity(price_ID - 1);
+                            this->moc.obj(price_ID, 2) = obj_value;
 
-                            price_rl_ID += 1;
+                            price_ID += 1;
                             obj_value += this->demand.price(price_demand_ID) * this->demand.quantity(price_demand_ID);
-                            this->moc_rl.price(price_rl_ID) = this->demand.price(price_demand_ID);
-                            this->moc_rl.rl(price_rl_ID) = this->moc_rl.rl(price_rl_ID - 1) + this->demand.quantity(price_demand_ID);
-                            this->moc_rl.obj(price_rl_ID) = obj_value;
-                            std::cout << moc_rl.price(price_rl_ID) << "\t";
-                            std::cout << moc_rl.rl(price_rl_ID) << "\t";
-                            std::cout << moc_rl.obj(price_rl_ID) << "\t";
-                            std::cout << "\n";
-
+                            this->moc.price(price_ID) = this->demand.price(price_demand_ID);
+                            this->moc.quantity(price_ID) = this->moc.quantity(price_ID - 1) + this->demand.quantity(price_demand_ID);
+                            this->moc.obj(price_ID) = obj_value;
                         }
                         // Next supply marginal price lower than demand; add that supply quantity to residual load
                         else{
                             price_supply_ID += price_supply_ID < this->supply.price.size() - 2;
-                            this->moc_rl.price(price_rl_ID) = this->supply.price(price_supply_ID);
-                            this->moc_rl.rl(price_rl_ID) = this->moc_rl.rl(price_rl_ID - 1);
-                            this->moc_rl.obj(price_rl_ID, 2) = obj_value;
-                            std::cout << moc_rl.price(price_rl_ID) << "\t";
-                            std::cout << moc_rl.rl(price_rl_ID) << "\t";
-                            std::cout << moc_rl.obj(price_rl_ID) << "\t";
-                            std::cout << "\n";
+                            this->moc.price(price_ID) = this->supply.price(price_supply_ID);
+                            this->moc.quantity(price_ID) = this->moc.quantity(price_ID - 1);
+                            this->moc.obj(price_ID, 2) = obj_value;
 
-                            price_rl_ID += 1;
+                            price_ID += 1;
                             obj_value += this->supply.price(price_supply_ID) * this->supply.quantity(price_supply_ID);
-                            this->moc_rl.price(price_rl_ID) = this->supply.price(price_supply_ID);
-                            this->moc_rl.rl(price_rl_ID) = this->moc_rl.rl(price_rl_ID - 1) + this->supply.quantity(price_supply_ID);
-                            this->moc_rl.obj(price_rl_ID) = obj_value;
-                            std::cout << moc_rl.price(price_rl_ID) << "\t";
-                            std::cout << moc_rl.rl(price_rl_ID) << "\t";
-                            std::cout << moc_rl.obj(price_rl_ID) << "\t";
-                            std::cout << "\n";
+                            this->moc.price(price_ID) = this->supply.price(price_supply_ID);
+                            this->moc.quantity(price_ID) = this->moc.quantity(price_ID - 1) + this->supply.quantity(price_supply_ID);
+                            this->moc.obj(price_ID) = obj_value;
                         }
                     }
 
                     // Last item when price = Inf
-                    price_rl_ID += 1;
-                    this->moc_rl.price(price_rl_ID) = std::numeric_limits<double>::infinity();
-                    this->moc_rl.rl(price_rl_ID) = this->moc_rl.rl(price_rl_ID - 1);
-                    this->moc_rl.obj(price_rl_ID) = obj_value;
-                    std::cout << moc_rl.price(price_rl_ID) << "\t";
-                    std::cout << moc_rl.rl(price_rl_ID) << "\t";
-                    std::cout << moc_rl.obj(price_rl_ID) << "\t";
-                    std::cout << "\n";
+                    price_ID += 1;
+                    this->moc.price(price_ID) = std::numeric_limits<double>::infinity();
+                    this->moc.quantity(price_ID) = this->moc.quantity(price_ID - 1);
+                    this->moc.obj(price_ID) = obj_value;
                 }
             };
 
             double theta_mul;
-            std::vector <bid_struct> bid_node;
-            std::vector <Eigen::MatrixXd> cost_funcs;
+            std::vector <cost_func_struct> cost_funcs;
         };
         obj_struct obj;
 

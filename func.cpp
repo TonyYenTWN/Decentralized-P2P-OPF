@@ -19,43 +19,47 @@ namespace ADMM{
 
         // Set cost functions
         opf.theta_mul_calc();
-        opf.obj.cost_funcs = std::vector <Eigen::MatrixXd> (opf.statistic.num_variable);
+        opf.obj.cost_funcs = std::vector <opf_struct::obj_struct::cost_func_struct> (opf.statistic.num_variable);
 
         // Phase angle boundaries
         for(int node_iter = 0; node_iter < num_node; ++ node_iter){
             int var_ID = node_iter;
-            Eigen::MatrixXd cost_func(4, 2);
-            cost_func.row(0) << -std::numeric_limits<double>::infinity(), -theta_limit * opf.obj.theta_mul;
-            cost_func.row(1) << 0, -theta_limit * opf.obj.theta_mul;
-            cost_func.row(2) << 0, theta_limit * opf.obj.theta_mul;
-            cost_func.row(3) << std::numeric_limits<double>::infinity(), theta_limit * opf.obj.theta_mul;
+            opf_struct::obj_struct::cost_func_struct cost_func;
+            cost_func.moc.price = Eigen::VectorXd(4);
+            cost_func.moc.quantity = Eigen::VectorXd(4);
+            cost_func.moc.obj = Eigen::VectorXd::Zero(4);
+
+            cost_func.moc.price << -std::numeric_limits<double>::infinity(), 0., 0., std::numeric_limits<double>::infinity();
+            cost_func.moc.quantity << -theta_limit * opf.obj.theta_mul, -theta_limit * opf.obj.theta_mul, theta_limit * opf.obj.theta_mul, theta_limit * opf.obj.theta_mul;
+
             opf.obj.cost_funcs[var_ID] = cost_func;
         }
 
         // Line current boundaries
         for(int line_iter = 0; line_iter < num_line; ++ line_iter){
             int var_ID = 2 * num_node + line_iter;
-            Eigen::MatrixXd cost_func(4, 2);
-            cost_func.row(0) << -std::numeric_limits<double>::infinity(), -current_limit;
-            cost_func.row(1) << 0, -theta_limit * opf.obj.theta_mul;
-            cost_func.row(2) << 0, theta_limit * opf.obj.theta_mul;
-            cost_func.row(3) << std::numeric_limits<double>::infinity(), current_limit;
+            opf_struct::obj_struct::cost_func_struct cost_func;
+            cost_func.moc.price = Eigen::VectorXd(4);
+            cost_func.moc.quantity = Eigen::VectorXd(4);
+            cost_func.moc.obj = Eigen::VectorXd::Zero(4);
+
+            cost_func.moc.price << -std::numeric_limits<double>::infinity(), 0., 0., std::numeric_limits<double>::infinity();
+            cost_func.moc.quantity << -current_limit, -current_limit, current_limit, current_limit;
+
             opf.obj.cost_funcs[var_ID] = cost_func;
         }
 
         // Power source / sink cost functions
-        opf.obj.bid_node = std::vector <opf_struct::obj_struct::bid_struct> (num_node);
-
         // First node is source node
-        opf.obj.bid_node[0].supply.price = Eigen::VectorXd(3);
-        opf.obj.bid_node[0].supply.quantity = Eigen::VectorXd(3);
-        opf.obj.bid_node[0].supply.price << -std::numeric_limits<double>::infinity(), 0., std::numeric_limits<double>::infinity();
-        opf.obj.bid_node[0].supply.quantity << 0., total_load, 0.;
-        opf.obj.bid_node[0].demand.price = Eigen::VectorXd(2);
-        opf.obj.bid_node[0].demand.quantity = Eigen::VectorXd::Zero(2);
-        opf.obj.bid_node[0].demand.price << -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity();
-        opf.obj.bid_node[0].moc_rl_set();
-        std::cout << "\n";
+        opf.obj.cost_funcs[num_node].supply.price = Eigen::VectorXd(3);
+        opf.obj.cost_funcs[num_node].supply.quantity = Eigen::VectorXd(3);
+        opf.obj.cost_funcs[num_node].supply.price << -std::numeric_limits<double>::infinity(), 0., std::numeric_limits<double>::infinity();
+        opf.obj.cost_funcs[num_node].supply.quantity << 0., total_load, 0.;
+        opf.obj.cost_funcs[num_node].demand.price = Eigen::VectorXd(2);
+        opf.obj.cost_funcs[num_node].demand.quantity = Eigen::VectorXd::Zero(2);
+        opf.obj.cost_funcs[num_node].demand.price << -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity();
+        opf.obj.cost_funcs[num_node].moc_set();
+
 
         // Other nodes are sink node
         double node_load = total_load / (num_node - 1) / num_price;
@@ -63,24 +67,24 @@ namespace ADMM{
             int var_ID = num_node + node_iter;
 
             // Set bid functions for suuply
-            opf.obj.bid_node[node_iter].supply.price = Eigen::VectorXd(2);
-            opf.obj.bid_node[node_iter].supply.quantity = Eigen::VectorXd::Zero(2);
-            opf.obj.bid_node[node_iter].supply.price << -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity();
+            opf.obj.cost_funcs[var_ID].supply.price = Eigen::VectorXd(2);
+            opf.obj.cost_funcs[var_ID].supply.quantity = Eigen::VectorXd::Zero(2);
+            opf.obj.cost_funcs[var_ID].supply.price << -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity();
 
             // Set bid functions for demand
-            opf.obj.bid_node[node_iter].demand.price = Eigen::VectorXd(num_price + 2);
-            opf.obj.bid_node[node_iter].demand.quantity = Eigen::VectorXd(num_price + 2);
-            opf.obj.bid_node[node_iter].demand.price << -std::numeric_limits<double>::infinity(), Eigen::VectorXd::LinSpaced(num_price, 1., (double) num_price), std::numeric_limits<double>::infinity();
-            opf.obj.bid_node[node_iter].demand.quantity << 0., node_load * Eigen::VectorXd::Ones(num_price), 0.;
+            opf.obj.cost_funcs[var_ID].demand.price = Eigen::VectorXd(num_price + 2);
+            opf.obj.cost_funcs[var_ID].demand.quantity = Eigen::VectorXd(num_price + 2);
+            opf.obj.cost_funcs[var_ID].demand.price << -std::numeric_limits<double>::infinity(), Eigen::VectorXd::LinSpaced(num_price, 1., (double) num_price), std::numeric_limits<double>::infinity();
+            opf.obj.cost_funcs[var_ID].demand.quantity << 0., node_load * Eigen::VectorXd::Ones(num_price), 0.;
 
             // Set merit order curve for residual load
-            opf.obj.bid_node[node_iter].moc_rl_set();
-            std::cout << "\n";
+            opf.obj.cost_funcs[var_ID].moc_set();
         }
 
         // Set solver
         opf.Matrix_main_set();
     }
+
 
 
 }
