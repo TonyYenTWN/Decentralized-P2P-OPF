@@ -115,27 +115,39 @@ namespace ADMM{
 
         // Solver
         struct solver_struct{
+            // Augmented Lagrangian:
+            // L(x, u) = f(x) + .5 * \rho * ||A %*% x + u||^2
+            // x = scaled voltage (V), power source / sink (S), and line current (I)
+            // u = dual variables of the constraints
+            // f(x): cost function associated with V, S, and I (f(V) and f(I) are well functions)
+
             // Main matrix
             Eigen::SparseMatrix <double> Matrix_main;
 
             // Solution
             struct sol_struct{
                 struct value_struct{
-                    Eigen::VectorXd variables;
-                    double error;
+                    struct variable_struct{
+                        Eigen::VectorXd now;
+                        Eigen::VectorXd prev;
+                    };
+                    variable_struct variables;
+                    Eigen::VectorXd price_margin;
+                    Eigen::VectorXd error;
                 };
 
                 value_struct prime;
                 value_struct dual;
                 double obj_value;
             };
+            sol_struct sol;
         };
         solver_struct solver;
 
         // Functions
-        void problem_size_parmeters_set(){
-            this->statistic.num_variable = 2 * this->statistic.num_node + this->statistic.num_line;
-            this->statistic.num_constraint = this->statistic.num_node + this->statistic.num_line;
+        void problem_size_parmeters_set(int factor = 1){
+            this->statistic.num_variable = factor * (2 * this->statistic.num_node + this->statistic.num_line);
+            this->statistic.num_constraint = factor * (this->statistic.num_node + this->statistic.num_line);
         }
 
         void theta_mul_calc(){
@@ -146,7 +158,8 @@ namespace ADMM{
             this->obj.theta_mul = exp(log_y_l / this->statistic.num_line);
         }
 
-        void Matrix_main_set(){
+        // Main matrix initialization for DC OPF
+        void DC_Matrix_main_set(){
             // Variables: V, S, I
             // Constraints: Node balance, line current
             int num_entry = this->statistic.num_node + 5 * this->statistic.num_line;
@@ -184,6 +197,136 @@ namespace ADMM{
 
             // Put Everything in to the matrix
             this->solver.Matrix_main.setFromTriplets(Matrix_main_trip.begin(), Matrix_main_trip.end());
+        }
+
+        // Solver function
+        void solve(double tol){
+            // f(x) + .5 * rho * ||A %*% x + u||^2
+            // f(x) + .5 * rho * ||a_i %*% x_i + (A_!i %*% x_!i + u)||^2
+            // f(x) + .5 * rho * (a_i^2 x_i^2 + 2 * (b * a_i) %*% x_i + ...)
+            // KKT: p_i(x) + rho * (a_i^2 x_i + (b * a_i)) = 0
+            // or p_i(x) = -rho * (a_i^2 x_i + (b * a_i))
+            // or x_i = (-p_i(x) / rho - b * a_i) / a_i^2
+
+            // Calculate sensitivity for each variable
+            Eigen::VectorXd sensitivity_x(this->statistic.num_variable);
+            Eigen::SparseMatrix <double> Diagonal(this->statistic.num_variable, this->statistic.num_variable);
+            std::vector <Eigen::Triplet <double>> Diagonal_trip;
+            Diagonal_trip.reserve(this->statistic.num_variable);
+            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
+                Eigen::VectorXd green_vec = Eigen::VectorXd::Zero(this->statistic.num_variable);
+                green_vec(var_iter) = 1.;
+                Eigen::VectorXd A_col = this->solver.Matrix_main * green_vec;
+                sensitivity_x(var_iter) = (A_col.array() * A_col.array()).sum();
+                Diagonal_trip.push_back(Eigen::Triplet <double> (var_iter, var_iter, 1. / sensitivity_x(var_iter)));
+            }
+            Diagonal.setFromTriplets(Diagonal_trip.begin(), Diagonal_trip.end());
+
+            // Calculate appropriate regulation / weight factor for Jacobi method
+            // for omega < 2 / (lambda_max + lambda_min) and PSD matrix, Jacobi method converges globally
+            // theoretical optimum is omega = 2 / (lambda_max + lambda_min), to stay safe we choose min(1. / lambda_max, 1E-2)
+            double omega;
+            double eigen_value;
+            Eigen::SparseMatrix <double> Iteration_Matrix = Diagonal * this->solver.Matrix_main.transpose() * this->solver.Matrix_main;
+            Eigen::VectorXd eigen_vec_prev = Eigen::VectorXd::Ones(this->statistic.num_variable);
+            eigen_vec_prev /= (eigen_vec_prev.array() * eigen_vec_prev.array()).sum();
+            Eigen::VectorXd eigen_vec = Eigen::VectorXd::Ones(this->statistic.num_variable);
+            while(true){
+                eigen_vec = Iteration_Matrix * eigen_vec;
+                eigen_value = (eigen_vec.array() * (Iteration_Matrix * eigen_vec).array()).sum();
+                eigen_value /= (eigen_vec.array() * eigen_vec.array()).sum();
+                eigen_vec /= eigen_value;
+
+                if((eigen_vec - eigen_vec_prev).norm() >= 1E-12){
+                    eigen_vec_prev = eigen_vec;
+                }
+                else{
+                    break;
+                }
+            }
+//            omega = std::min(1. / abs(eigen_value), 1E-2);
+            omega = 1.;
+
+            // Initialization
+            double rho = 1.;
+            this->solver.sol.prime.variables.prev = Eigen::VectorXd::Zero(this->statistic.num_variable);
+            this->solver.sol.prime.variables.now = Eigen::VectorXd::Zero(this->statistic.num_variable);
+            this->solver.sol.prime.price_margin = Eigen::VectorXd::Zero(this->statistic.num_variable);
+            this->solver.sol.dual.variables.now = Eigen::VectorXd::Zero(this->statistic.num_constraint);
+
+            // Main loop
+            int loop = 0;
+            while(true){
+                // Update prime variables and associate prices
+//                Eigen::VectorXd constant = this->solver.Matrix_main * this->solver.sol.prime.variables.now + this->solver.sol.dual.variables.now;
+                for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
+                    Eigen::VectorXd constant = this->solver.Matrix_main * this->solver.sol.prime.variables.now + this->solver.sol.dual.variables.now;
+                    Eigen::VectorXd constant_temp = constant - this->solver.sol.prime.variables.now(var_iter) * this->solver.Matrix_main.col(var_iter);
+                    double inner_prod = (constant_temp.transpose() * this->solver.Matrix_main.col(var_iter)).sum();
+
+                    Eigen::Vector2i gap_price_ID(0, this->obj.cost_funcs[var_iter].moc.price.size() - 1);
+                    int mid_price_ID = gap_price_ID.sum() / 2.;
+                    while(gap_price_ID(1) - gap_price_ID(0) > 1){
+                        Eigen::Vector2d gap_rent;
+                        gap_rent(0) = this->obj.cost_funcs[var_iter].moc.price(gap_price_ID(0));
+                        gap_rent(0) += rho * (sensitivity_x(var_iter) * this->obj.cost_funcs[var_iter].moc.quantity(gap_price_ID(0)) + inner_prod);
+                        gap_rent(1) = this->obj.cost_funcs[var_iter].moc.price(gap_price_ID(1));
+                        gap_rent(1) += rho * (sensitivity_x(var_iter) * this->obj.cost_funcs[var_iter].moc.quantity(gap_price_ID(1)) + inner_prod);
+
+                        double mid_rent;
+                        mid_rent = this->obj.cost_funcs[var_iter].moc.price(mid_price_ID);
+                        mid_rent += rho * (sensitivity_x(var_iter) * this->obj.cost_funcs[var_iter].moc.quantity(mid_price_ID) + inner_prod);
+
+                        // Bisection root-search method
+                        if(mid_rent * gap_rent(0) <= 0){
+                            gap_price_ID(1) = mid_price_ID;
+                        }
+                        else{
+                            gap_price_ID(0) = mid_price_ID;
+                        }
+
+                        mid_price_ID = gap_price_ID.sum() / 2.;
+                    }
+
+                    // Check binding term
+                    if(gap_price_ID(0) % 2 == 1){
+                        // price fixed case
+                        this->solver.sol.prime.price_margin(var_iter) = this->obj.cost_funcs[var_iter].moc.price(mid_price_ID);
+                        this->solver.sol.prime.variables.now(var_iter) = -this->solver.sol.prime.price_margin(var_iter) / rho;
+                        this->solver.sol.prime.variables.now(var_iter) -= inner_prod;
+                        this->solver.sol.prime.variables.now(var_iter) /= sensitivity_x(var_iter);
+                    }
+                    else{
+                        // quantity fixed case
+                        this->solver.sol.prime.variables.now(var_iter) = this->obj.cost_funcs[var_iter].moc.quantity(mid_price_ID);
+                        this->solver.sol.prime.price_margin(var_iter) = -rho * (sensitivity_x(var_iter) * this->obj.cost_funcs[var_iter].moc.quantity(mid_price_ID) + inner_prod);
+                    }
+                }
+
+                // Stabilization weight for x update
+                this->solver.sol.prime.variables.now = omega * this->solver.sol.prime.variables.now + (1. - omega) * this->solver.sol.prime.variables.prev;
+                this->solver.sol.prime.variables.prev = this->solver.sol.prime.variables.now;
+
+                // Update dual variables
+                this->solver.sol.dual.variables.now += this->solver.Matrix_main * this->solver.sol.prime.variables.now;
+
+                // Check convergence
+                this->solver.sol.prime.error = this->solver.Matrix_main * this->solver.sol.prime.variables.now;
+                this->solver.sol.dual.error = this->solver.sol.prime.price_margin;
+                this->solver.sol.dual.error += rho * this->solver.Matrix_main.transpose() * this->solver.sol.dual.variables.now;
+                if(std::min(this->solver.sol.prime.error.norm(), this->solver.sol.dual.error.norm()) < tol){
+                    break;
+                }
+
+                // Update rho according to current prime and dual errors
+                double error_ratio = abs(log(this->solver.sol.prime.error.norm() / this->solver.sol.dual.error.norm()));
+                if(error_ratio > log(10.)){
+                    rho *= pow(error_ratio, .5);
+                }
+                loop += 1;
+            }
+            std::cout << loop << "\n";
+            std::cout << this->solver.sol.prime.variables.now.transpose() << "\n";
         }
     };
 

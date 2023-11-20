@@ -2,6 +2,7 @@
 #include "header.h"
 
 namespace ADMM{
+    // Problem initialization for test simple radial power line
     void radial_line_problem_set(opf_struct &opf, int num_node, int num_price, std::complex<double> y_l, double theta_limit, double current_limit, double total_load){
         // Set systems statistic
         opf.statistic.num_node = num_node;
@@ -11,7 +12,7 @@ namespace ADMM{
 
         // Set network information
         opf.network.line_conductance = y_l * Eigen::VectorXcd::Ones(num_line);
-        opf.network.line_conductance /= num_line;
+        opf.network.line_conductance *= num_line;
         opf.network.topology.reserve(num_line);
         for(int line_iter = 0; line_iter < num_line; ++ line_iter){
             opf.network.topology.push_back(Eigen::Vector2i(line_iter, line_iter + 1));
@@ -60,7 +61,6 @@ namespace ADMM{
         opf.obj.cost_funcs[num_node].demand.price << -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity();
         opf.obj.cost_funcs[num_node].moc_set();
 
-
         // Other nodes are sink node
         double node_load = total_load / (num_node - 1) / num_price;
         for(int node_iter = 1; node_iter < num_node; ++ node_iter){
@@ -82,9 +82,8 @@ namespace ADMM{
         }
 
         // Set solver
-        opf.Matrix_main_set();
+        opf.DC_Matrix_main_set();
     }
-
 
 
 }
