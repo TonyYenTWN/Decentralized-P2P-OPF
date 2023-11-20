@@ -31,9 +31,9 @@
 		<Linker>
 			<Add option="-fopenmp -s" />
 		</Linker>
-		<Unit filename="func.cpp" />
-		<Unit filename="header.h" />
-		<Unit filename="main.cpp" />
+		<Unit filename="src/func.cpp" />
+		<Unit filename="src/header.h" />
+		<Unit filename="src/main.cpp" />
 		<Extensions>
 			<lib_finder disable_auto="1" />
 		</Extensions>

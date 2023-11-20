@@ -7,12 +7,16 @@
 #include <iostream>
 
 // Additional libraries
-#include <boost/math/constants/constants.hpp>
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 
 // Structures
 namespace ADMM{
+    static inline double pi(){
+        double value = 3.14159265358979323846;
+        return value;
+    }
+
     struct opf_struct{
         // System statistic
         struct statistic_struct{
@@ -200,14 +204,7 @@ namespace ADMM{
         }
 
         // Solver function
-        void solve(double tol){
-            // f(x) + .5 * rho * ||A %*% x + u||^2
-            // f(x) + .5 * rho * ||a_i %*% x_i + (A_!i %*% x_!i + u)||^2
-            // f(x) + .5 * rho * (a_i^2 x_i^2 + 2 * (b * a_i) %*% x_i + ...)
-            // KKT: p_i(x) + rho * (a_i^2 x_i + (b * a_i)) = 0
-            // or p_i(x) = -rho * (a_i^2 x_i + (b * a_i))
-            // or x_i = (-p_i(x) / rho - b * a_i) / a_i^2
-
+        void solve(double tol_prime, double tol_dual){
             // Calculate sensitivity for each variable
             Eigen::VectorXd sensitivity_x(this->statistic.num_variable);
             Eigen::SparseMatrix <double> Diagonal(this->statistic.num_variable, this->statistic.num_variable);
@@ -244,89 +241,122 @@ namespace ADMM{
                     break;
                 }
             }
-//            omega = std::min(1. / abs(eigen_value), 1E-2);
+//            omega = std::min(1. / abs(eigen_value), 1E-3);
             omega = 1.;
 
             // Initialization
-            double rho = 1.;
+            double rho = 1E6;
             this->solver.sol.prime.variables.prev = Eigen::VectorXd::Zero(this->statistic.num_variable);
             this->solver.sol.prime.variables.now = Eigen::VectorXd::Zero(this->statistic.num_variable);
             this->solver.sol.prime.price_margin = Eigen::VectorXd::Zero(this->statistic.num_variable);
+            this->solver.sol.dual.variables.prev = Eigen::VectorXd::Zero(this->statistic.num_constraint);
             this->solver.sol.dual.variables.now = Eigen::VectorXd::Zero(this->statistic.num_constraint);
 
             // Main loop
+            // f(x) + .5 * rho * ||A %*% x + u||^2
+            // f(x) + .5 * rho * ||a_i %*% x_i + (A_!i %*% x_!i + u)||^2
+            // f(x) + .5 * rho * (a_i^2 x_i^2 + 2 * (b * a_i) %*% x_i + ...)
+            // KKT: p_i(x) + rho * (a_i^2 x_i + (b * a_i)) = 0
+            // or p_i(x) = -rho * (a_i^2 x_i + (b * a_i))
+            // or x_i = (-p_i(x) / rho - b * a_i) / a_i^2
             int loop = 0;
             while(true){
                 // Update prime variables and associate prices
-//                Eigen::VectorXd constant = this->solver.Matrix_main * this->solver.sol.prime.variables.now + this->solver.sol.dual.variables.now;
-                for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
-                    Eigen::VectorXd constant = this->solver.Matrix_main * this->solver.sol.prime.variables.now + this->solver.sol.dual.variables.now;
-                    Eigen::VectorXd constant_temp = constant - this->solver.sol.prime.variables.now(var_iter) * this->solver.Matrix_main.col(var_iter);
-                    double inner_prod = (constant_temp.transpose() * this->solver.Matrix_main.col(var_iter)).sum();
+                while(true){
+//                    Eigen::VectorXd constant = this->solver.Matrix_main * this->solver.sol.prime.variables.now + this->solver.sol.dual.variables.now;
+                    for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
+                        Eigen::VectorXd constant = this->solver.Matrix_main * this->solver.sol.prime.variables.now + this->solver.sol.dual.variables.now;
+                        Eigen::VectorXd constant_temp = constant - this->solver.sol.prime.variables.now(var_iter) * this->solver.Matrix_main.col(var_iter);
+                        double inner_prod = (constant_temp.transpose() * this->solver.Matrix_main.col(var_iter)).sum();
 
-                    Eigen::Vector2i gap_price_ID(0, this->obj.cost_funcs[var_iter].moc.price.size() - 1);
-                    int mid_price_ID = gap_price_ID.sum() / 2.;
-                    while(gap_price_ID(1) - gap_price_ID(0) > 1){
-                        Eigen::Vector2d gap_rent;
-                        gap_rent(0) = this->obj.cost_funcs[var_iter].moc.price(gap_price_ID(0));
-                        gap_rent(0) += rho * (sensitivity_x(var_iter) * this->obj.cost_funcs[var_iter].moc.quantity(gap_price_ID(0)) + inner_prod);
-                        gap_rent(1) = this->obj.cost_funcs[var_iter].moc.price(gap_price_ID(1));
-                        gap_rent(1) += rho * (sensitivity_x(var_iter) * this->obj.cost_funcs[var_iter].moc.quantity(gap_price_ID(1)) + inner_prod);
+                        Eigen::Vector2i gap_price_ID(0, this->obj.cost_funcs[var_iter].moc.price.size() - 1);
+                        int mid_price_ID = gap_price_ID.sum() / 2.;
+                        while(gap_price_ID(1) - gap_price_ID(0) > 1){
+                            Eigen::Vector2d gap_rent;
+                            gap_rent(0) = this->obj.cost_funcs[var_iter].moc.price(gap_price_ID(0));
+                            gap_rent(0) += rho * (sensitivity_x(var_iter) * this->obj.cost_funcs[var_iter].moc.quantity(gap_price_ID(0)) + inner_prod);
+                            gap_rent(1) = this->obj.cost_funcs[var_iter].moc.price(gap_price_ID(1));
+                            gap_rent(1) += rho * (sensitivity_x(var_iter) * this->obj.cost_funcs[var_iter].moc.quantity(gap_price_ID(1)) + inner_prod);
 
-                        double mid_rent;
-                        mid_rent = this->obj.cost_funcs[var_iter].moc.price(mid_price_ID);
-                        mid_rent += rho * (sensitivity_x(var_iter) * this->obj.cost_funcs[var_iter].moc.quantity(mid_price_ID) + inner_prod);
+                            double mid_rent;
+                            mid_rent = this->obj.cost_funcs[var_iter].moc.price(mid_price_ID);
+                            mid_rent += rho * (sensitivity_x(var_iter) * this->obj.cost_funcs[var_iter].moc.quantity(mid_price_ID) + inner_prod);
 
-                        // Bisection root-search method
-                        if(mid_rent * gap_rent(0) <= 0){
-                            gap_price_ID(1) = mid_price_ID;
+                            // Bisection root-search method
+                            if(mid_rent * gap_rent(0) <= 0){
+                                gap_price_ID(1) = mid_price_ID;
+                            }
+                            else{
+                                gap_price_ID(0) = mid_price_ID;
+                            }
+
+                            mid_price_ID = gap_price_ID.sum() / 2.;
+                        }
+
+                        // Check binding term
+                        if(gap_price_ID(0) % 2 == 1){
+                            // price fixed case
+                            this->solver.sol.prime.price_margin(var_iter) = this->obj.cost_funcs[var_iter].moc.price(mid_price_ID);
+                            this->solver.sol.prime.variables.now(var_iter) = -this->solver.sol.prime.price_margin(var_iter) / rho;
+                            this->solver.sol.prime.variables.now(var_iter) -= inner_prod;
+                            this->solver.sol.prime.variables.now(var_iter) /= sensitivity_x(var_iter);
                         }
                         else{
-                            gap_price_ID(0) = mid_price_ID;
+                            // quantity fixed case
+                            this->solver.sol.prime.variables.now(var_iter) = this->obj.cost_funcs[var_iter].moc.quantity(mid_price_ID);
+                            this->solver.sol.prime.price_margin(var_iter) = -rho * (sensitivity_x(var_iter) * this->obj.cost_funcs[var_iter].moc.quantity(mid_price_ID) + inner_prod);
                         }
-
-                        mid_price_ID = gap_price_ID.sum() / 2.;
                     }
 
-                    // Check binding term
-                    if(gap_price_ID(0) % 2 == 1){
-                        // price fixed case
-                        this->solver.sol.prime.price_margin(var_iter) = this->obj.cost_funcs[var_iter].moc.price(mid_price_ID);
-                        this->solver.sol.prime.variables.now(var_iter) = -this->solver.sol.prime.price_margin(var_iter) / rho;
-                        this->solver.sol.prime.variables.now(var_iter) -= inner_prod;
-                        this->solver.sol.prime.variables.now(var_iter) /= sensitivity_x(var_iter);
-                    }
-                    else{
-                        // quantity fixed case
-                        this->solver.sol.prime.variables.now(var_iter) = this->obj.cost_funcs[var_iter].moc.quantity(mid_price_ID);
-                        this->solver.sol.prime.price_margin(var_iter) = -rho * (sensitivity_x(var_iter) * this->obj.cost_funcs[var_iter].moc.quantity(mid_price_ID) + inner_prod);
-                    }
+                    // Stabilization weight for x update
+                    this->solver.sol.prime.variables.now = omega * this->solver.sol.prime.variables.now + (1. - omega) * this->solver.sol.prime.variables.prev;
+                    this->solver.sol.prime.variables.prev = this->solver.sol.prime.variables.now;
+
+                    // Check convergence for subproblem
+//                    this->solver.sol.dual.error = this->solver.Matrix_main * this->solver.sol.prime.variables.now + this->solver.sol.dual.variables.now;
+//                    this->solver.sol.dual.error = rho * this->solver.Matrix_main.transpose() * this->solver.sol.dual.error;
+//                    this->solver.sol.dual.error += this->solver.sol.prime.price_margin;
+//                    if((this->solver.sol.dual.error.array() * this->solver.sol.dual.error.array()).maxCoeff() < 1.){
+//                        break;
+//                    }
+                    break;
                 }
-
-                // Stabilization weight for x update
-                this->solver.sol.prime.variables.now = omega * this->solver.sol.prime.variables.now + (1. - omega) * this->solver.sol.prime.variables.prev;
-                this->solver.sol.prime.variables.prev = this->solver.sol.prime.variables.now;
 
                 // Update dual variables
                 this->solver.sol.dual.variables.now += this->solver.Matrix_main * this->solver.sol.prime.variables.now;
 
-                // Check convergence
+                // Check convergence for whole problem
                 this->solver.sol.prime.error = this->solver.Matrix_main * this->solver.sol.prime.variables.now;
                 this->solver.sol.dual.error = this->solver.sol.prime.price_margin;
                 this->solver.sol.dual.error += rho * this->solver.Matrix_main.transpose() * this->solver.sol.dual.variables.now;
-                if(std::min(this->solver.sol.prime.error.norm(), this->solver.sol.dual.error.norm()) < tol){
+                double prime_error_norm = this->solver.sol.prime.error.norm();
+                prime_error_norm /= this->solver.sol.prime.error.size();
+                double dual_error_norm = this->solver.sol.dual.error.norm();
+                dual_error_norm /= this->solver.sol.dual.error.size();
+                if(prime_error_norm < tol_prime && dual_error_norm < tol_dual){
                     break;
                 }
 
-                // Update rho according to current prime and dual errors
-                double error_ratio = abs(log(this->solver.sol.prime.error.norm() / this->solver.sol.dual.error.norm()));
-                if(error_ratio > log(10.)){
-                    rho *= pow(error_ratio, .5);
+                // Print progress
+                if(loop % 1000 == 0){
+                    std::cout << "Loop:\t" << loop << "\n";
+                    std::cout << "Prime Error:\t" << prime_error_norm << "\n";
+                    std::cout << "Dual Error:\t" << dual_error_norm << "\n";
+                    std::cout << "\n\n";
                 }
+
+                // Update rho according to current prime and dual errors
+                double error_ratio = abs(log(prime_error_norm / dual_error_norm));
+                rho *= pow(error_ratio, .5);
+                rho = std::min(1E6, rho);
+                rho = std::max(1E2, rho);
                 loop += 1;
             }
-            std::cout << loop << "\n";
-            std::cout << this->solver.sol.prime.variables.now.transpose() << "\n";
+            std::cout << "Total loop:\t" << loop << "\n";
+            std::cout << "Prime Error:\t" << this->solver.sol.prime.error.norm() / this->solver.sol.prime.error.size() << "\n";
+            std::cout << "Dual Error:\t" << this->solver.sol.dual.error.norm() / this->solver.sol.dual.error.size() << "\n";
+            std::cout << "Solution:\n";
+            std::cout << this->solver.sol.prime.variables.now.segment(this->statistic.num_node, this->statistic.num_node).transpose() << "\n";
         }
     };
 
