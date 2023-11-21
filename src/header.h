@@ -112,7 +112,12 @@ namespace ADMM{
                 }
             };
 
-            double theta_mul;
+            struct transform_struct{
+                Eigen::VectorXd scale;
+                Eigen::VectorXd shift;
+            };
+            transform_struct transformation;
+
             std::vector <cost_func_struct> cost_funcs;
         };
         obj_struct obj;
@@ -120,13 +125,15 @@ namespace ADMM{
         // Solver
         struct solver_struct{
             // Augmented Lagrangian:
-            // L(x, u) = f(x) + .5 * \rho * ||A %*% x + u||^2
+            // L(x, u) = f(x) + .5 * \rho * ||A %*% x - c + u||^2
             // x = scaled voltage (V), power source / sink (S), and line current (I)
+            // c = equality values
             // u = dual variables of the constraints
             // f(x): cost function associated with V, S, and I (f(V) and f(I) are well functions)
 
             // Main matrix
             Eigen::SparseMatrix <double> Matrix_main;
+            Eigen::VectorXd boundary;
 
             // Solution
             struct sol_struct{
@@ -154,12 +161,26 @@ namespace ADMM{
             this->statistic.num_constraint = factor * (this->statistic.num_node + this->statistic.num_line);
         }
 
-        void theta_mul_calc(){
-            double log_y_l = 0;
-            for(int line_iter = 0; line_iter < this->statistic.num_line; ++ line_iter){
-                log_y_l += log(std::abs(this->network.line_conductance(line_iter)));
+        void transformation_set(){
+            // transformation:
+            // x' = 1 / m * (x - x_0)
+            // price and quantity in moc must be scaled accordingly
+            // price: p(x') = m * p(x)
+
+            this->obj.transformation.scale = Eigen::VectorXd(this->statistic.num_variable);
+            this->obj.transformation.shift = Eigen::VectorXd(this->statistic.num_variable);
+            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
+                this->obj.transformation.scale(var_iter) = this->obj.cost_funcs[var_iter].moc.quantity.maxCoeff();
+                this->obj.transformation.scale(var_iter) -= this->obj.cost_funcs[var_iter].moc.quantity.minCoeff();
+                this->obj.transformation.scale(var_iter) /= 2;
+                this->obj.transformation.shift(var_iter) = this->obj.cost_funcs[var_iter].moc.quantity.maxCoeff();
+                this->obj.transformation.shift(var_iter) += this->obj.cost_funcs[var_iter].moc.quantity.minCoeff();
+                this->obj.transformation.shift(var_iter) /= 2;
+
+                this->obj.cost_funcs[var_iter].moc.quantity -= this->obj.transformation.shift(var_iter) * Eigen::VectorXd::Ones(this->statistic.num_variable);
+                this->obj.cost_funcs[var_iter].moc.quantity /= this->obj.transformation.scale(var_iter);
+                this->obj.cost_funcs[var_iter].moc.price *= this->obj.transformation.scale(var_iter);
             }
-            this->obj.theta_mul = exp(log_y_l / this->statistic.num_line);
         }
 
         // Main matrix initialization for DC OPF
@@ -192,15 +213,28 @@ namespace ADMM{
             for(int line_iter = 0; line_iter < this->statistic.num_line; ++ line_iter){
                 int var_ID = 2 * this->statistic.num_node + line_iter;
                 int constr_ID = this->statistic.num_node + line_iter;
-                double scale = this->network.line_conductance(line_iter).imag() / this->obj.theta_mul;
+                double y_l = this->network.line_conductance(line_iter).imag();
 
-                Matrix_main_trip.push_back(Eigen::Triplet <double> (constr_ID, this->network.topology[line_iter](0), scale));
-                Matrix_main_trip.push_back(Eigen::Triplet <double> (constr_ID, this->network.topology[line_iter](1), -scale));
+                Matrix_main_trip.push_back(Eigen::Triplet <double> (constr_ID, this->network.topology[line_iter](0), y_l));
+                Matrix_main_trip.push_back(Eigen::Triplet <double> (constr_ID, this->network.topology[line_iter](1), -y_l));
                 Matrix_main_trip.push_back(Eigen::Triplet <double> (constr_ID, var_ID, -1));
             }
 
             // Put Everything in to the matrix
             this->solver.Matrix_main.setFromTriplets(Matrix_main_trip.begin(), Matrix_main_trip.end());
+
+            // Set boundary for equality constraints
+            this->solver.boundary = -this->solver.Matrix_main * this->obj.transformation.shift;
+
+            // Apply transformation to the matrix
+            Eigen::SparseMatrix <double> Diagonal(this->statistic.num_variable, this->statistic.num_variable);
+            std::vector <Eigen::Triplet <double>> Diagonal_trip;
+            Diagonal_trip.reserve(this->statistic.num_variable);
+            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
+                Diagonal_trip.push_back(Eigen::Triplet <double> (var_iter, var_iter, this->obj.transformation.scale(var_iter)));
+            }
+            Diagonal.setFromTriplets(Diagonal_trip.begin(), Diagonal_trip.end());
+            this->solver.Matrix_main = this->solver.Matrix_main * Diagonal;
         }
 
         // Solver function
@@ -241,8 +275,8 @@ namespace ADMM{
                     break;
                 }
             }
-//            omega = std::min(1. / abs(eigen_value), 1E-3);
-            omega = 1.;
+            omega = std::min(2. / abs(eigen_value), 1. / 2.);
+//            omega = 1.;
 
             // Initialization
             double rho = 1E-4;
@@ -253,8 +287,8 @@ namespace ADMM{
             this->solver.sol.dual.variables.now = Eigen::VectorXd::Zero(this->statistic.num_constraint);
 
             // Main loop
-            // f(x) + .5 * rho * ||A %*% x + u||^2
-            // f(x) + .5 * rho * ||a_i %*% x_i + (A_!i %*% x_!i + u)||^2
+            // f(x) + .5 * rho * ||A %*% x - c + u||^2
+            // f(x) + .5 * rho * ||a_i %*% x_i + (A_!i %*% x_!i - c_i + u)||^2
             // f(x) + .5 * rho * (a_i^2 x_i^2 + 2 * (b * a_i) %*% x_i + ...)
             // KKT: p_i(x) + rho * (a_i^2 x_i + (b * a_i)) = 0
             // or p_i(x) = -rho * (a_i^2 x_i + (b * a_i))
@@ -263,9 +297,11 @@ namespace ADMM{
             while(true){
                 // Update prime variables and associate prices
                 while(true){
-//                    Eigen::VectorXd constant = this->solver.Matrix_main * this->solver.sol.prime.variables.now + this->solver.sol.dual.variables.now;
+                    Eigen::VectorXd constant = this->solver.Matrix_main * this->solver.sol.prime.variables.now;
+                    constant -= this->solver.boundary;
+                    constant += this->solver.sol.dual.variables.now;
                     for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
-                        Eigen::VectorXd constant = this->solver.Matrix_main * this->solver.sol.prime.variables.now + this->solver.sol.dual.variables.now;
+//                        Eigen::VectorXd constant = this->solver.Matrix_main * this->solver.sol.prime.variables.now + this->solver.sol.dual.variables.now;
                         Eigen::VectorXd constant_temp = constant - this->solver.sol.prime.variables.now(var_iter) * this->solver.Matrix_main.col(var_iter);
                         double inner_prod = (constant_temp.transpose() * this->solver.Matrix_main.col(var_iter)).sum();
 
@@ -314,8 +350,8 @@ namespace ADMM{
 
                     // Check convergence for subproblem
                     double tol_sub = 10. / (loop + 1);
-                    tol_sub = std::max(tol_sub, 1E-2 * tol_dual);
-                    this->solver.sol.dual.error = this->solver.Matrix_main * this->solver.sol.prime.variables.now + this->solver.sol.dual.variables.now;
+                    tol_sub = std::max(tol_sub, 1E-3 * tol_dual);
+                    this->solver.sol.dual.error = this->solver.Matrix_main * this->solver.sol.prime.variables.now - this->solver.boundary + this->solver.sol.dual.variables.now;
                     this->solver.sol.dual.error = rho * this->solver.Matrix_main.transpose() * this->solver.sol.dual.error;
                     this->solver.sol.dual.error += this->solver.sol.prime.price_margin;
                     if((this->solver.sol.dual.error.array() * this->solver.sol.dual.error.array()).maxCoeff() < tol_sub){
@@ -324,10 +360,11 @@ namespace ADMM{
                 }
 
                 // Update dual variables
-                this->solver.sol.dual.variables.now += this->solver.Matrix_main * this->solver.sol.prime.variables.now;
+                // u <- u + A %*% x - c
+                this->solver.sol.dual.variables.now += this->solver.Matrix_main * this->solver.sol.prime.variables.now - this->solver.boundary;
 
                 // Check convergence for whole problem
-                this->solver.sol.prime.error = this->solver.Matrix_main * this->solver.sol.prime.variables.now;
+                this->solver.sol.prime.error = this->solver.Matrix_main * this->solver.sol.prime.variables.now - this->solver.boundary;
                 this->solver.sol.dual.error = this->solver.sol.prime.price_margin;
                 this->solver.sol.dual.error += rho * this->solver.Matrix_main.transpose() * this->solver.sol.dual.variables.now;
                 double prime_error_norm = this->solver.sol.prime.error.norm();
@@ -339,7 +376,7 @@ namespace ADMM{
                 }
 
                 // Print progress
-                int sys_show = (int) 6. - log(this->statistic.num_variable) / log(10.);
+                int sys_show = (int) 7. - log(this->statistic.num_variable) / log(10.);
                 sys_show = std::max(sys_show, 0);
                 if(loop % (int) pow(10., sys_show) == 0){
                     std::cout << "Loop:\t" << loop << "\n";

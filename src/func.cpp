@@ -19,7 +19,6 @@ namespace ADMM{
         }
 
         // Set cost functions
-        opf.theta_mul_calc();
         opf.obj.cost_funcs = std::vector <opf_struct::obj_struct::cost_func_struct> (opf.statistic.num_variable);
 
         // Phase angle boundaries
@@ -31,7 +30,7 @@ namespace ADMM{
             cost_func.moc.obj = Eigen::VectorXd::Zero(4);
 
             cost_func.moc.price << -std::numeric_limits<double>::infinity(), 0., 0., std::numeric_limits<double>::infinity();
-            cost_func.moc.quantity << -theta_limit * opf.obj.theta_mul, -theta_limit * opf.obj.theta_mul, theta_limit * opf.obj.theta_mul, theta_limit * opf.obj.theta_mul;
+            cost_func.moc.quantity << -theta_limit, -theta_limit, theta_limit, theta_limit;
 
             opf.obj.cost_funcs[var_ID] = cost_func;
         }
@@ -82,6 +81,7 @@ namespace ADMM{
         }
 
         // Set solver
+        opf.transformation_set();
         opf.DC_Matrix_main_set();
     }
 
