@@ -314,7 +314,7 @@ namespace ADMM{
 
                     // Check convergence for subproblem
                     double tol_sub = 10. / (loop + 1);
-                    tol_sub = std::max(tol_sub, 1E-8);
+                    tol_sub = std::max(tol_sub, 1E-2 * tol_dual);
                     this->solver.sol.dual.error = this->solver.Matrix_main * this->solver.sol.prime.variables.now + this->solver.sol.dual.variables.now;
                     this->solver.sol.dual.error = rho * this->solver.Matrix_main.transpose() * this->solver.sol.dual.error;
                     this->solver.sol.dual.error += this->solver.sol.prime.price_margin;
@@ -339,7 +339,9 @@ namespace ADMM{
                 }
 
                 // Print progress
-                if(loop % 1000 == 0){
+                int sys_show = (int) 6. - log(this->statistic.num_variable) / log(10.);
+                sys_show = std::max(sys_show, 0);
+                if(loop % (int) pow(10., sys_show) == 0){
                     std::cout << "Loop:\t" << loop << "\n";
                     std::cout << "Prime Error:\t" << prime_error_norm << "\n";
                     std::cout << "Dual Error:\t" << dual_error_norm << "\n";
@@ -347,25 +349,10 @@ namespace ADMM{
                 }
 
                 // Update rho according to current prime and dual errors
-//                rho += 1E-3;
-//                rho = std::min(10., rho);
                 if(loop < 1E6){
                     rho += 1E-4;
                     rho = std::min(100., rho);
                 }
-//                else{
-//                    if(prime_error_norm > 1E-3 * dual_error_norm){
-//                        rho += 1E-3;
-//                    }
-//                    else if(prime_error_norm < 1E-3 * dual_error_norm){
-//                        rho -= 1E-3;
-//                    }
-//                    rho = std::min(1000., rho);
-//                    rho = std::max(10., rho);
-//                }
-
-
-
                 loop += 1;
             }
             std::cout << "Total loop:\t" << loop << "\n";

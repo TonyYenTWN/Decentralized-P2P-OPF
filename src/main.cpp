@@ -6,7 +6,7 @@
 int main()
 {
     int num_node = 300;
-    int num_price = 10;
+    int num_price = 600;
     std::complex<double> y_l (0., 1.);
     double theta_limit = ADMM::pi() / 6.;
     double I_limit = .9;
