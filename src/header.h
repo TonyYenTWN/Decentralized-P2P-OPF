@@ -245,7 +245,7 @@ namespace ADMM{
             omega = 1.;
 
             // Initialization
-            double rho = 1E6;
+            double rho = 1E-4;
             this->solver.sol.prime.variables.prev = Eigen::VectorXd::Zero(this->statistic.num_variable);
             this->solver.sol.prime.variables.now = Eigen::VectorXd::Zero(this->statistic.num_variable);
             this->solver.sol.prime.price_margin = Eigen::VectorXd::Zero(this->statistic.num_variable);
@@ -313,13 +313,14 @@ namespace ADMM{
                     this->solver.sol.prime.variables.prev = this->solver.sol.prime.variables.now;
 
                     // Check convergence for subproblem
-//                    this->solver.sol.dual.error = this->solver.Matrix_main * this->solver.sol.prime.variables.now + this->solver.sol.dual.variables.now;
-//                    this->solver.sol.dual.error = rho * this->solver.Matrix_main.transpose() * this->solver.sol.dual.error;
-//                    this->solver.sol.dual.error += this->solver.sol.prime.price_margin;
-//                    if((this->solver.sol.dual.error.array() * this->solver.sol.dual.error.array()).maxCoeff() < 1.){
-//                        break;
-//                    }
-                    break;
+                    double tol_sub = 10. / (loop + 1);
+                    tol_sub = std::max(tol_sub, 1E-8);
+                    this->solver.sol.dual.error = this->solver.Matrix_main * this->solver.sol.prime.variables.now + this->solver.sol.dual.variables.now;
+                    this->solver.sol.dual.error = rho * this->solver.Matrix_main.transpose() * this->solver.sol.dual.error;
+                    this->solver.sol.dual.error += this->solver.sol.prime.price_margin;
+                    if((this->solver.sol.dual.error.array() * this->solver.sol.dual.error.array()).maxCoeff() < tol_sub){
+                        break;
+                    }
                 }
 
                 // Update dual variables
@@ -346,10 +347,25 @@ namespace ADMM{
                 }
 
                 // Update rho according to current prime and dual errors
-                double error_ratio = abs(log(prime_error_norm / dual_error_norm));
-                rho *= pow(error_ratio, .5);
-                rho = std::min(1E6, rho);
-                rho = std::max(1E2, rho);
+//                rho += 1E-3;
+//                rho = std::min(10., rho);
+                if(loop < 1E6){
+                    rho += 1E-4;
+                    rho = std::min(100., rho);
+                }
+//                else{
+//                    if(prime_error_norm > 1E-3 * dual_error_norm){
+//                        rho += 1E-3;
+//                    }
+//                    else if(prime_error_norm < 1E-3 * dual_error_norm){
+//                        rho -= 1E-3;
+//                    }
+//                    rho = std::min(1000., rho);
+//                    rho = std::max(10., rho);
+//                }
+
+
+
                 loop += 1;
             }
             std::cout << "Total loop:\t" << loop << "\n";
