@@ -127,13 +127,16 @@ namespace ADMM{
             // Augmented Lagrangian:
             // L(x, u) = f(x) + .5 * \rho * ||A %*% x - c + u||^2
             // x = scaled voltage (V), power source / sink (S), and line current (I)
-            // c = equality values
+            // c = equality boundary
             // u = dual variables of the constraints
             // f(x): cost function associated with V, S, and I (f(V) and f(I) are well functions)
 
-            // Main matrix
-            Eigen::SparseMatrix <double> Matrix_main;
-            Eigen::VectorXd boundary;
+            struct constraint_struct{
+                // Main matrix
+                Eigen::SparseMatrix <double> Matrix_main;
+                Eigen::VectorXd boundary;
+            };
+            constraint_struct constraint;
 
             // Solution
             struct sol_struct{
@@ -190,7 +193,7 @@ namespace ADMM{
             int num_entry = this->statistic.num_node + 5 * this->statistic.num_line;
 
             // Set the main matrix
-            this->solver.Matrix_main = Eigen::SparseMatrix <double> (this->statistic.num_constraint, this->statistic.num_variable);
+            this->solver.constraint.Matrix_main = Eigen::SparseMatrix <double> (this->statistic.num_constraint, this->statistic.num_variable);
             std::vector <Eigen::Triplet <double>> Matrix_main_trip;
             Matrix_main_trip.reserve(num_entry);
 
@@ -221,10 +224,10 @@ namespace ADMM{
             }
 
             // Put Everything in to the matrix
-            this->solver.Matrix_main.setFromTriplets(Matrix_main_trip.begin(), Matrix_main_trip.end());
+            this->solver.constraint.Matrix_main.setFromTriplets(Matrix_main_trip.begin(), Matrix_main_trip.end());
 
             // Set boundary for equality constraints
-            this->solver.boundary = -this->solver.Matrix_main * this->obj.transformation.shift;
+            this->solver.constraint.boundary = -this->solver.constraint.Matrix_main * this->obj.transformation.shift;
 
             // Apply transformation to the matrix
             Eigen::SparseMatrix <double> Diagonal(this->statistic.num_variable, this->statistic.num_variable);
@@ -234,7 +237,7 @@ namespace ADMM{
                 Diagonal_trip.push_back(Eigen::Triplet <double> (var_iter, var_iter, this->obj.transformation.scale(var_iter)));
             }
             Diagonal.setFromTriplets(Diagonal_trip.begin(), Diagonal_trip.end());
-            this->solver.Matrix_main = this->solver.Matrix_main * Diagonal;
+            this->solver.constraint.Matrix_main = this->solver.constraint.Matrix_main * Diagonal;
         }
 
         // Solver function
@@ -247,7 +250,7 @@ namespace ADMM{
             for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
                 Eigen::VectorXd green_vec = Eigen::VectorXd::Zero(this->statistic.num_variable);
                 green_vec(var_iter) = 1.;
-                Eigen::VectorXd A_col = this->solver.Matrix_main * green_vec;
+                Eigen::VectorXd A_col = this->solver.constraint.Matrix_main * green_vec;
                 sensitivity_x(var_iter) = (A_col.array() * A_col.array()).sum();
                 Diagonal_trip.push_back(Eigen::Triplet <double> (var_iter, var_iter, 1. / sensitivity_x(var_iter)));
             }
@@ -258,7 +261,7 @@ namespace ADMM{
             // theoretical optimum is omega = 2 / (lambda_max + lambda_min), to stay safe we choose min(1. / lambda_max, 1E-2)
             double omega;
             double eigen_value;
-            Eigen::SparseMatrix <double> Iteration_Matrix = Diagonal * this->solver.Matrix_main.transpose() * this->solver.Matrix_main;
+            Eigen::SparseMatrix <double> Iteration_Matrix = Diagonal * this->solver.constraint.Matrix_main.transpose() * this->solver.constraint.Matrix_main;
             Eigen::VectorXd eigen_vec_prev = Eigen::VectorXd::Ones(this->statistic.num_variable);
             eigen_vec_prev /= (eigen_vec_prev.array() * eigen_vec_prev.array()).sum();
             Eigen::VectorXd eigen_vec = Eigen::VectorXd::Ones(this->statistic.num_variable);
@@ -297,13 +300,13 @@ namespace ADMM{
             while(true){
                 // Update prime variables and associate prices
                 while(true){
-                    Eigen::VectorXd constant = this->solver.Matrix_main * this->solver.sol.prime.variables.now;
-                    constant -= this->solver.boundary;
+                    Eigen::VectorXd constant = this->solver.constraint.Matrix_main * this->solver.sol.prime.variables.now;
+                    constant -= this->solver.constraint.boundary;
                     constant += this->solver.sol.dual.variables.now;
                     for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
-//                        Eigen::VectorXd constant = this->solver.Matrix_main * this->solver.sol.prime.variables.now + this->solver.sol.dual.variables.now;
-                        Eigen::VectorXd constant_temp = constant - this->solver.sol.prime.variables.now(var_iter) * this->solver.Matrix_main.col(var_iter);
-                        double inner_prod = (constant_temp.transpose() * this->solver.Matrix_main.col(var_iter)).sum();
+//                        Eigen::VectorXd constant = this->solver.constraint.Matrix_main * this->solver.sol.prime.variables.now + this->solver.sol.dual.variables.now;
+                        Eigen::VectorXd constant_temp = constant - this->solver.sol.prime.variables.now(var_iter) * this->solver.constraint.Matrix_main.col(var_iter);
+                        double inner_prod = (constant_temp.transpose() * this->solver.constraint.Matrix_main.col(var_iter)).sum();
 
                         Eigen::Vector2i gap_price_ID(0, this->obj.cost_funcs[var_iter].moc.price.size() - 1);
                         int mid_price_ID = gap_price_ID.sum() / 2.;
@@ -351,8 +354,8 @@ namespace ADMM{
                     // Check convergence for subproblem
                     double tol_sub = 10. / (loop + 1);
                     tol_sub = std::max(tol_sub, 1E-3 * tol_dual);
-                    this->solver.sol.dual.error = this->solver.Matrix_main * this->solver.sol.prime.variables.now - this->solver.boundary + this->solver.sol.dual.variables.now;
-                    this->solver.sol.dual.error = rho * this->solver.Matrix_main.transpose() * this->solver.sol.dual.error;
+                    this->solver.sol.dual.error = this->solver.constraint.Matrix_main * this->solver.sol.prime.variables.now - this->solver.constraint.boundary + this->solver.sol.dual.variables.now;
+                    this->solver.sol.dual.error = rho * this->solver.constraint.Matrix_main.transpose() * this->solver.sol.dual.error;
                     this->solver.sol.dual.error += this->solver.sol.prime.price_margin;
                     if((this->solver.sol.dual.error.array() * this->solver.sol.dual.error.array()).maxCoeff() < tol_sub){
                         break;
@@ -361,12 +364,12 @@ namespace ADMM{
 
                 // Update dual variables
                 // u <- u + A %*% x - c
-                this->solver.sol.dual.variables.now += this->solver.Matrix_main * this->solver.sol.prime.variables.now - this->solver.boundary;
+                this->solver.sol.dual.variables.now += this->solver.constraint.Matrix_main * this->solver.sol.prime.variables.now - this->solver.constraint.boundary;
 
                 // Check convergence for whole problem
-                this->solver.sol.prime.error = this->solver.Matrix_main * this->solver.sol.prime.variables.now - this->solver.boundary;
+                this->solver.sol.prime.error = this->solver.constraint.Matrix_main * this->solver.sol.prime.variables.now - this->solver.constraint.boundary;
                 this->solver.sol.dual.error = this->solver.sol.prime.price_margin;
-                this->solver.sol.dual.error += rho * this->solver.Matrix_main.transpose() * this->solver.sol.dual.variables.now;
+                this->solver.sol.dual.error += rho * this->solver.constraint.Matrix_main.transpose() * this->solver.sol.dual.variables.now;
                 double prime_error_norm = this->solver.sol.prime.error.norm();
                 prime_error_norm /= this->solver.sol.prime.error.size();
                 double dual_error_norm = this->solver.sol.dual.error.norm();
