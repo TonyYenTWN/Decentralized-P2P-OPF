@@ -37,36 +37,12 @@ moc_create <- function(bid_demand, bid_supply, M){
   return(moc_rl)
 }
 
-## Price finding func for residual load curve
-price_find <- function(rl, residual_load_curve){
-  if(residual_load_curve[1] > rl){
-    nodal_price <- price[1]
-  }else if(residual_load_curve[num_price] < rl){
-    nodal_price <- price[num_price + 1]
-  }else{
-    price_low <- 1
-    price_high <- num_price + 1
-    
-    while(price_high - price_low > 1){
-      price_mid <- round(.5 * (price_low + price_high))
-      
-      if((residual_load_curve[price_low] - rl) * (residual_load_curve[price_mid] - rl) <= 0){
-        price_high <- price_mid
-      }else{
-        price_low <- price_mid
-      }
-    }
-    nodal_price <- price[price_mid]
-  }
-  return(nodal_price)
-}
-
 ### Network Parameters
-num_node <- 4
-num_line <- 3
-z_img <- 1E-2
+num_node <- 3
+num_line <- 2
+z_img <- 1
 Cond = diag(rep(1 / z_img, num_line))
-V_limit <- pi / 6
+V_limit <- 100
 I_limit <- 100
 
 ## Topology of the network
@@ -98,7 +74,7 @@ Z_eq <- solve(Y_eq[2:num_node, 2:num_node])
 # w = box constraint indicator for power balance, voltage, and line current
 # c = boundary of box constraints
 # u = dual variables of the constraints
-# f(x): cost function associated with S (cost function from reference node implicitly incorporated); assume constant at each iteration
+# f(x): cost function associated with S
 # g(w) = indicator function for the box constraint
 num_box <- num_node + num_line
 num_constraints <- 2 * num_box
@@ -120,14 +96,6 @@ constraint_now <- constraint_now + (num_node - 1)
 A[constraint_now + 1:(num_node - 1), 2:num_node] <- -Z_eq
 constraint_now <- constraint_now + (num_node - 1)
 
-# Box Constraint for Power Source / Sink
-# S - w_[S, neg] = S_min
-# -S - w_{S, pos} = -S_max
-# A[constraint_now + 1:num_node, 1:num_node] <- diag(rep(1, num_node))
-# constraint_now <- constraint_now + num_node
-# A[constraint_now + 1:num_node, 1:num_node] <- diag(rep(-1, num_node))
-# constraint_now <- constraint_now + num_node
-
 # Box Constraint for Line Current
 # (Cond %*% NL)[, 2:num_node] %*% Z_eq %*% S - w_{I, neg} = -I_limit
 # -(Cond %*% NL)[, 2:num_node] %*% Z_eq %*% S - w_{I, pos} = -I_limit
@@ -146,12 +114,18 @@ bid_demand[[1]][1, ] <- c(-big_num, 0)
 bid_demand[[1]][2, ] <- c(big_num, 0)
 bid_supply[[1]] <- matrix(0, ncol = 2, nrow = 3)
 bid_supply[[1]][1, ] <- c(-big_num, 0)
-bid_supply[[1]][2, ] <- c(0, 100)
+bid_supply[[1]][2, ] <- c(0, 2000)
 bid_supply[[1]][3, ] <- c(big_num, 0)
 moc_rl[[1]] <- moc_create(bid_demand[[1]], bid_supply[[1]], big_num)
 rl_boundary[1, ] <- range(moc_rl[[1]][, 2])
 
 for(node_iter in 2:num_node){
+  # bid_demand[[node_iter]] <- matrix(0, ncol = 2, nrow = 102)
+  # bid_demand[[node_iter]][1, ] <- c(-big_num, 0)
+  # for(price_iter in 1:100){
+  #   bid_demand[[node_iter]][price_iter + 1, ] <- c(price_iter, 1)
+  # }
+  # bid_demand[[node_iter]][12, ] <- c(big_num, 0)
   bid_demand[[node_iter]] <- matrix(0, ncol = 2, nrow = 3)
   bid_demand[[node_iter]][1, ] <- c(-big_num, 0)
   bid_demand[[node_iter]][2, ] <- c(100, 10)
@@ -171,24 +145,30 @@ for(node_iter in 2:num_node){
 # f(x) + g(w) + .5 * \rho * (a_i^2 x_i^2 + 2 * (b * a_i) %*% x_i + ...)
 # KKT: p(x) + \rho * (a_i^2 x_i + (b * a_i)) = 0
 tol <- 1E-6
+alpha <- .9
 rho <- 1
 sensitivity_x <- c()
 for(var_iter in 1:num_variable){
   sensitivity_x[var_iter] <- t(A[, var_iter]) %*% A[, var_iter]
 }
+x_prev <- rep(0, num_variable)
 x <- rep(0, num_variable)
 x_best <- rep(0, num_variable)
+w_prev <- rep(0, num_constraints)
 w <- rep(0, num_constraints)
 boundary <- c(0, 0, rep(-V_limit, 2 * (num_node - 1)), rep(-I_limit, 2 * num_line))
+u_prev <- rep(0, num_constraints)
 u <- rep(0, num_constraints)
 price_margin <- rep(0, num_node)
 error_min <- Inf
 
 loop <- 0
+lyapunov <- c()
 while(TRUE){
   # Update state variables
+  constant <- A %*% x - w - boundary + u # Parallel if this is outside the loop for variables
   for(node_iter in 1:num_node){
-    constant <- A %*% x - w - boundary + u # Sequential if this is inside the loop for variables
+    # constant <- A %*% x - w - boundary + u # Sequential if this is inside the loop for variables
     constant_temp <- constant - x[node_iter] * A[, node_iter]
     
     # Bisection method
@@ -198,7 +178,7 @@ while(TRUE){
       gap_rent <- moc_rl[[node_iter]][gap_price_ID, 1] + rho * (as.vector(sensitivity_x[node_iter] * moc_rl[[node_iter]][gap_price_ID, 2]) + c(t(constant_temp) %*% A[, node_iter]))
       mid_rent <- moc_rl[[node_iter]][mid_price_ID, 1] + rho * (as.vector(sensitivity_x[node_iter] * moc_rl[[node_iter]][mid_price_ID, 2]) + c(t(constant_temp) %*% A[, node_iter]))
       
-      if(mid_rent * gap_rent[1] < 0){
+      if(mid_rent * gap_rent[1] <= 0){
         gap_price_ID[2] <- mid_price_ID
       }else{
         gap_price_ID[1] <- mid_price_ID
@@ -219,6 +199,8 @@ while(TRUE){
       price_margin[node_iter] <- -rho * (sensitivity_x[node_iter] * x[node_iter] + t(constant_temp) %*% A[, node_iter]) 
     }
   }
+  x <- alpha * x_prev + (1 - alpha) * x
+  x_prev <- x
   
   # Update constraint indicators
   w <- A %*% x - boundary + u
@@ -227,13 +209,9 @@ while(TRUE){
   # Update dual variables
   u <- u + A %*% x - w - boundary
   
-  # u[5]
-  # prime_error[5]
-  # range(constant)
-  
   # Check convergence
   prime_error <- A %*% x - w - boundary
-  dual_error <- price_margin / rho + t(A) %*% u  
+  dual_error <- price_margin / rho + t(A) %*% u
   
   if(max(prime_error^2, dual_error^2) < error_min){
     error_min <- max(prime_error^2, dual_error^2)
@@ -252,7 +230,12 @@ while(TRUE){
     print(price_margin)
   }  
   loop <- loop + 1 
+  
+  lyapunov[loop] <- sum((u - u_prev)^2 + (w - w_prev)^2)
+  u_prev <- u
+  w_prev <- w
 }
+plot(log(lyapunov), type = "l")
 
 S <- x_best
 V <- c(0, Z_eq %*% S[2:num_node])
