@@ -80,7 +80,7 @@ for(line_iter in 1:num_line){
 ### Market Parameters and Cost FUnctions
 # Cost functions for S
 big_num <- 1E16
-num_price <- 10
+num_price <- 100
 bid_demand <- list()
 bid_supply <- list()
 moc_rl <- list()
@@ -112,13 +112,15 @@ for(node_iter in 2:num_node){
 ## For each node i
 ## given p_{N_i}, V_{N_i}
 ## min f(S_i) + (p_{N_i} * I_{N_i} + .5 * rho * (sum(S_!i) + S_i + u)) * S_i
+tol <- 1E-6
 rho = 10
-alpha = .005
+alpha = .001
 price_margin <- rep(0, num_node)
 voltage <- rep(0, num_node)
+S_prev <- rep(0, num_node)
 S <- rep(0, num_node)
 u <- 0
-for(loop in 1:1000){
+for(loop in 1:2000){
   
   # Update power
   constant <- sum(S)
@@ -219,7 +221,12 @@ for(loop in 1:1000){
   # Update dual
   u <- u + sum(S)
   
-  # break
+  # Check convergence
+  error <- S - S_prev
+  if(max(abs(error), abs(sum(S))) < tol){
+    break
+  }
+  S_prev <- S
 }
 S
 sum(S)
