@@ -5,11 +5,11 @@
 
 int main()
 {
-    int num_node = 3;
+    int num_node = 101;
     int num_price = 10;
     std::complex<double> y_l (0., 1.);
     double theta_limit = ADMM::pi() / 6.;
-    double I_limit = .9;
+    double I_limit = 1.;
     double total_load = 2.;
 
     ADMM::opf_struct opf;

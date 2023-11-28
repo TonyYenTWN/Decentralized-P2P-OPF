@@ -53,7 +53,7 @@ namespace ADMM{
         // First node is source node
         opf.obj.cost_funcs[num_node].supply.price = Eigen::VectorXd(3);
         opf.obj.cost_funcs[num_node].supply.quantity = Eigen::VectorXd(3);
-        opf.obj.cost_funcs[num_node].supply.price << -std::numeric_limits<double>::infinity(), 0., std::numeric_limits<double>::infinity();
+        opf.obj.cost_funcs[num_node].supply.price << -std::numeric_limits<double>::infinity(), (double) num_price / 2., std::numeric_limits<double>::infinity();
         opf.obj.cost_funcs[num_node].supply.quantity << 0., total_load, 0.;
         opf.obj.cost_funcs[num_node].demand.price = Eigen::VectorXd(2);
         opf.obj.cost_funcs[num_node].demand.quantity = Eigen::VectorXd::Zero(2);
@@ -81,9 +81,11 @@ namespace ADMM{
         }
 
         // Set solver
-        opf.transformation_set();
+        opf.transformation_set(0);
         opf.DC_Matrix_main_set();
     }
 
+    void eigen_value(Eigen::SparseMatrix <double> Mat){
 
+    }
 }
