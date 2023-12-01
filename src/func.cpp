@@ -53,7 +53,7 @@ namespace ADMM{
         // First node is source node
         opf.obj.cost_funcs[num_node].supply.price = Eigen::VectorXd(3);
         opf.obj.cost_funcs[num_node].supply.quantity = Eigen::VectorXd(3);
-        opf.obj.cost_funcs[num_node].supply.price << -std::numeric_limits<double>::infinity(), (double) num_price / 2., std::numeric_limits<double>::infinity();
+        opf.obj.cost_funcs[num_node].supply.price << -std::numeric_limits<double>::infinity(), 0., std::numeric_limits<double>::infinity();
         opf.obj.cost_funcs[num_node].supply.quantity << 0., total_load, 0.;
         opf.obj.cost_funcs[num_node].demand.price = Eigen::VectorXd(2);
         opf.obj.cost_funcs[num_node].demand.quantity = Eigen::VectorXd::Zero(2);
@@ -74,6 +74,7 @@ namespace ADMM{
             opf.obj.cost_funcs[var_ID].demand.price = Eigen::VectorXd(num_price + 2);
             opf.obj.cost_funcs[var_ID].demand.quantity = Eigen::VectorXd(num_price + 2);
             opf.obj.cost_funcs[var_ID].demand.price << -std::numeric_limits<double>::infinity(), Eigen::VectorXd::LinSpaced(num_price, 1., (double) num_price), std::numeric_limits<double>::infinity();
+            opf.obj.cost_funcs[var_ID].demand.price = opf.obj.cost_funcs[var_ID].demand.price / num_price;
             opf.obj.cost_funcs[var_ID].demand.quantity << 0., node_load * Eigen::VectorXd::Ones(num_price), 0.;
 
             // Set merit order curve for residual load
@@ -81,11 +82,7 @@ namespace ADMM{
         }
 
         // Set solver
-        opf.transformation_set(0);
+        opf.transformation_set();
         opf.DC_Matrix_main_set();
-    }
-
-    void eigen_value(Eigen::SparseMatrix <double> Mat){
-
     }
 }
