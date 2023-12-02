@@ -117,6 +117,7 @@ namespace ADMM{
             struct transform_struct{
                 Eigen::VectorXd scale;
                 Eigen::VectorXd shift;
+                double obj;
             };
             transform_struct transformation;
 
@@ -177,6 +178,7 @@ namespace ADMM{
             // price: p(x') = m * p(x)
             this->obj.transformation.scale = Eigen::VectorXd::Ones(this->statistic.num_variable);
             this->obj.transformation.shift = Eigen::VectorXd::Zero(this->statistic.num_variable);
+            this->obj.transformation.obj = 1.;
             if(!flag){
                 return;
             }
@@ -192,6 +194,15 @@ namespace ADMM{
                 this->obj.cost_funcs[var_iter].moc.quantity -= this->obj.transformation.shift(var_iter) * Eigen::VectorXd::Ones(this->statistic.num_variable);
                 this->obj.cost_funcs[var_iter].moc.quantity /= this->obj.transformation.scale(var_iter);
                 this->obj.cost_funcs[var_iter].moc.price *= this->obj.transformation.scale(var_iter);
+            }
+
+            this->obj.transformation.obj = 0.;
+            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
+                this->obj.transformation.obj = std::max(this->obj.transformation.obj, abs(this->obj.cost_funcs[var_iter].moc.price[this->obj.cost_funcs[var_iter].moc.price.size() - 2]));
+            }
+            this->obj.transformation.obj *= 1E2;
+            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
+                this->obj.cost_funcs[var_iter].moc.price = this->obj.cost_funcs[var_iter].moc.price / this->obj.transformation.obj;
             }
         }
 
@@ -241,8 +252,10 @@ namespace ADMM{
 
             // Apply transformation to the matrix
             Eigen::MatrixXd Diag = Eigen::MatrixXd::Zero(this->statistic.num_variable, this->statistic.num_variable);
+            Eigen::MatrixXd Diag_inv = Eigen::MatrixXd::Zero(this->statistic.num_variable, this->statistic.num_variable);
             for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
                 Diag(var_iter, var_iter) = this->obj.transformation.scale(var_iter);
+                Diag_inv(var_iter, var_iter) = 1. / Diag(var_iter, var_iter);
             }
             Mat = Mat * Diag;
             Eigen::MatrixXd PSD = Mat.transpose() * Mat;
@@ -330,7 +343,7 @@ namespace ADMM{
                 while(entry_iter < this->solver.constraint.PSD_main_terms[var_iter].size()){
                     int row_ID = this->solver.constraint.PSD_main_terms[var_iter][entry_iter].first;
                     double coeff = this->solver.constraint.PSD_main_terms[var_iter][entry_iter].second;
-                    double value = coeff * this->solver.sol.prime.variables.prev(row_ID);
+                    double value = coeff * this->solver.sol.prime.variables.now(row_ID);
                     inner_prod += value;
                     entry_iter += 1;
                 }
@@ -394,13 +407,7 @@ namespace ADMM{
                 while(entry_iter < this->solver.constraint.PSD_main_terms[I_ID].size()){
                     int row_ID = this->solver.constraint.PSD_main_terms[I_ID][entry_iter].first;
                     double coeff = this->solver.constraint.PSD_main_terms[I_ID][entry_iter].second;
-                    double value;
-                    if(row_ID >  2 * this->statistic.num_node){
-                        value = coeff * this->solver.sol.prime.variables.prev(row_ID);
-                    }
-                    else{
-                        value = coeff * this->solver.sol.prime.variables.now(row_ID);
-                    }
+                    double value = coeff * this->solver.sol.prime.variables.now(row_ID);;
                     inner_prod += value;
                     entry_iter += 1;
                 }
@@ -567,7 +574,8 @@ namespace ADMM{
                 price[var_iter] = this->obj.cost_funcs[var_iter].moc.price(gap_price_ID(0));
             }
 
-            dx = price + rho * (this->solver.constraint.PSD_main * x + this->solver.constraint.Matrix_main.transpose() * (u - this->solver.constraint.boundary));
+            // dx / dt = t(A) * (b - u) - PSD * x
+            dx = price / rho + this->solver.constraint.PSD_main * x + this->solver.constraint.Matrix_main.transpose() * (u - this->solver.constraint.boundary);
             dx = -dx;
         }
 
@@ -606,8 +614,8 @@ namespace ADMM{
 
         void solve_RK4(double tol_prime, double tol_dual, bool print_flag = 1){
             double rho = 1.;
-            double dt = 2.5 / eigen_value(this->solver.constraint.PSD_main);
-            double alpha = .1 / dt;
+            double dt = 2.7 / eigen_value(this->solver.constraint.PSD_main);
+            double alpha = 1. / rho / dt;
             this->solver.sol.prime.variables.prev = Eigen::VectorXd::Zero(this->statistic.num_variable);
             this->solver.sol.prime.variables.now = Eigen::VectorXd::Zero(this->statistic.num_variable);
             this->solver.sol.prime.price_margin = Eigen::VectorXd::Zero(this->statistic.num_variable);
@@ -655,6 +663,129 @@ namespace ADMM{
                 gradient_u(this->solver.sol.prime.variables.now, du, alpha);
                 this->solver.sol.dual.variables.now += du * dt;
 
+                if(loop > 0 && loop % 2000000 == 0){
+                    // Root solving algorithm for exact price
+                    solve_iteration_subproblem(rho);
+
+                    // Check convergence for whole problem
+                    this->solver.sol.prime.error = this->solver.constraint.Matrix_main * this->solver.sol.prime.variables.now - this->solver.constraint.boundary;
+                    this->solver.sol.dual.error = this->solver.sol.prime.price_margin;
+                    this->solver.sol.dual.error += rho * this->solver.constraint.Matrix_main.transpose() * this->solver.sol.dual.variables.now;
+                    double prime_error_norm = this->solver.sol.prime.error.norm();
+                    prime_error_norm /= this->solver.sol.prime.error.size();
+                    double dual_error_norm = this->solver.sol.dual.error.norm();
+                    dual_error_norm /= this->solver.sol.dual.error.size();
+                    if(prime_error_norm < tol_prime && dual_error_norm < tol_dual){
+                        break;
+                    }
+
+                    if(print_flag){
+                        int sys_show = (int) 7. - log(this->statistic.num_variable) / log(10.);
+                        sys_show = std::max(sys_show, 0);
+                        if(loop % (int) pow(10., sys_show) == 0){
+                            std::cout << "Loop:\t" << loop << "\n";
+                            std::cout << "Prime Error:\t" << prime_error_norm << "\n";
+                            std::cout << "Dual Error:\t" << dual_error_norm << "\n";
+                            std::cout << "\n\n";
+                        }
+                    }
+                }
+
+                this->solver.sol.prime.variables.prev = this->solver.sol.prime.variables.now;
+                this->solver.sol.dual.variables.prev = this->solver.sol.dual.variables.now;
+                loop += 1;
+            }
+
+            if(print_flag){
+                std::cout << "Total loop:\t" << loop << "\n";
+                std::cout << "Prime Error:\t" << this->solver.sol.prime.error.norm() / this->solver.sol.prime.error.size() << "\n";
+                std::cout << "Dual Error:\t" << this->solver.sol.dual.error.norm() / this->solver.sol.dual.error.size() << "\n";
+                std::cout << "Solution:\n";
+                std::cout << (this->obj.transformation.scale.array() * this->solver.sol.prime.variables.now.array() + this->obj.transformation.shift.array()).segment(this->statistic.num_node, this->statistic.num_node).transpose() << "\n";
+            }
+        }
+
+        void solve_RKF45(double tol_prime, double tol_dual, bool print_flag = 1){
+            double rho = 1.;
+            double dt = 3.1 / eigen_value(this->solver.constraint.PSD_main);
+            double alpha = .1 / rho / dt;
+            this->solver.sol.prime.variables.prev = Eigen::VectorXd::Zero(this->statistic.num_variable);
+            this->solver.sol.prime.variables.now = Eigen::VectorXd::Zero(this->statistic.num_variable);
+            this->solver.sol.prime.price_margin = Eigen::VectorXd::Zero(this->statistic.num_variable);
+            this->solver.sol.dual.variables.prev = Eigen::VectorXd::Zero(this->statistic.num_constraint);
+            this->solver.sol.dual.variables.now = Eigen::VectorXd::Zero(this->statistic.num_constraint);
+
+            int loop = 0;
+            while(true){
+                Eigen::VectorXd dx_1;
+                Eigen::VectorXd du_1;
+                gradient_x(this->solver.sol.prime.variables.now, this->solver.sol.dual.variables.now, dx_1, rho);
+                gradient_u(this->solver.sol.prime.variables.now, du_1, alpha);
+
+                Eigen::VectorXd x_2 = this->solver.sol.prime.variables.now;
+                x_2 += 1. / 4. * dx_1 * dt;
+                var_constrained(x_2);
+                Eigen::VectorXd u_2 = this->solver.sol.dual.variables.now;
+                u_2 += 1. / 4. * du_1 * dt;
+                Eigen::VectorXd dx_2;
+                Eigen::VectorXd du_2;
+                gradient_x(x_2, u_2, dx_2, rho);
+                gradient_u(x_2, du_2, alpha);
+
+                Eigen::VectorXd x_3 = this->solver.sol.prime.variables.now;
+                x_3 += 3. / 32. * dx_1 * dt + 9. / 32. * dx_2 * dt;
+                var_constrained(x_3);
+                Eigen::VectorXd u_3 = this->solver.sol.dual.variables.now;
+                u_3 += 3. / 32. * du_1 * dt + 9. / 32. * du_2 * dt;
+                Eigen::VectorXd dx_3;
+                Eigen::VectorXd du_3;
+                gradient_x(x_3, u_3, dx_3, rho);
+                gradient_u(x_3, du_3, alpha);
+
+                Eigen::VectorXd x_4 = this->solver.sol.prime.variables.now;
+                x_4 += 1932. / 2197. * dx_1 * dt - 7200. / 2197. * dx_2 * dt + 7296. / 2197. * dx_3 * dt;
+                var_constrained(x_4);
+                Eigen::VectorXd u_4 = this->solver.sol.dual.variables.now;
+                u_4 += 1932. / 2197. * du_1 * dt - 7200. / 2197. * du_2 * dt + 7296. / 2197. * du_3 * dt;
+                Eigen::VectorXd dx_4;
+                Eigen::VectorXd du_4;
+                gradient_x(x_4, u_4, dx_4, rho);
+                gradient_u(x_4, du_4, alpha);
+
+                Eigen::VectorXd x_5 = this->solver.sol.prime.variables.now;
+                x_5 += 439. / 216. * dx_1 * dt - 8. * dx_2 * dt + 3680. / 513. * dx_3 * dt - 845. / 4104. * dx_4 * dt;
+                var_constrained(x_5);
+                Eigen::VectorXd u_5 = this->solver.sol.dual.variables.now;
+                u_5 += 439. / 216. * du_1 * dt - 8. * du_2 * dt + 3680. / 513. * du_3 * dt - 845. / 4104. * du_4 * dt;
+                Eigen::VectorXd dx_5;
+                Eigen::VectorXd du_5;
+                gradient_x(x_5, u_5, dx_5, rho);
+                gradient_u(x_5, du_5, alpha);
+
+                Eigen::VectorXd x_6 = this->solver.sol.prime.variables.now;
+                x_6 += -8. / 27. * dx_1 * dt + 2. * dx_2 * dt - 3544. / 2565. * dx_3 * dt + 1859. / 4104. * dx_4 * dt - 11. / 40. * dx_5 * dt;
+                var_constrained(x_6);
+                Eigen::VectorXd u_6 = this->solver.sol.dual.variables.now;
+                u_6 += -8. / 27. * du_1 * dt + 2. * du_2 * dt - 3544. / 2565. * du_3 * dt + 1859. / 4104. * du_4 * dt - 11. / 40. * du_5 * dt;
+                Eigen::VectorXd dx_6;
+                gradient_x(x_6, u_6, dx_6, rho);
+
+                Eigen::VectorXd dh = dt * (16. / 135. * dx_1 + 6656. / 12825. * dx_3 + 28561. / 56430. * dx_4 - 9. / 50. * dx_5 + 2. / 55. * dx_6);
+//                Eigen::VectorXd dl = dt * (25. / 216. * dx_1 + 1408. / 2565. * dx_3 + 2197. / 4104. * dx_4 - 1. / 5. * dx_5);
+//                double truncate_error = (dl - dh).array().abs().maxCoeff();
+//                if(truncate_error > pow(tol_dual, 2.)){
+//                    dt *= .9 * pow(pow(tol_dual, 2.) / truncate_error, 1. / 5.);
+//                }
+//                else if(truncate_error < 1E-4 * pow(tol_dual, 2.)){
+//                    dt *= 1.05;
+//                }
+
+                this->solver.sol.prime.variables.now += dh;
+                var_constrained(this->solver.sol.prime.variables.now);
+                Eigen::VectorXd du;
+                gradient_u(this->solver.sol.prime.variables.now, du, alpha);
+                this->solver.sol.dual.variables.now += du * dt;
+
                 if(loop > 0 && loop % 5 == 0){
                     // Root solving algorithm for exact price
                     solve_iteration_subproblem(rho);
@@ -681,6 +812,8 @@ namespace ADMM{
                             std::cout << "\n\n";
                         }
                     }
+
+//                    break;
                 }
 
                 this->solver.sol.prime.variables.prev = this->solver.sol.prime.variables.now;

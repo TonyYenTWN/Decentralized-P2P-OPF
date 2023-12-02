@@ -74,7 +74,6 @@ namespace ADMM{
             opf.obj.cost_funcs[var_ID].demand.price = Eigen::VectorXd(num_price + 2);
             opf.obj.cost_funcs[var_ID].demand.quantity = Eigen::VectorXd(num_price + 2);
             opf.obj.cost_funcs[var_ID].demand.price << -std::numeric_limits<double>::infinity(), Eigen::VectorXd::LinSpaced(num_price, 1., (double) num_price), std::numeric_limits<double>::infinity();
-            opf.obj.cost_funcs[var_ID].demand.price = opf.obj.cost_funcs[var_ID].demand.price / num_price;
             opf.obj.cost_funcs[var_ID].demand.quantity << 0., node_load * Eigen::VectorXd::Ones(num_price), 0.;
 
             // Set merit order curve for residual load
