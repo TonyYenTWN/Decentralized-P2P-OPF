@@ -55,7 +55,7 @@ namespace ADMM{
                 cost_func.moc.price << -std::numeric_limits<double>::infinity(), 0., 0., std::numeric_limits<double>::infinity();
                 cost_func.moc.quantity << -theta_limit, -theta_limit, theta_limit, theta_limit;
 
-                pfs.opf_sub[network_iter].obj.cost_funcs[var_ID] = cost_func;
+                opfs.opf_sub[network_iter].obj.cost_funcs[var_ID] = cost_func;
             }
         }
     }
