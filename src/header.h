@@ -495,7 +495,6 @@ namespace ADMM{
 
                     sub_loop += 1;
                 }
-//                std::cout << sub_loop << "\n";
 
                 // Update dual variables
                 // u <- u + alpha * (A %*% x - c)
@@ -534,6 +533,7 @@ namespace ADMM{
                 std::cout << "Dual Error:\t" << this->solver.sol.dual.error.norm() / this->solver.sol.dual.error.size() << "\n";
                 std::cout << "Solution:\n";
                 std::cout << (this->obj.transformation.scale.array() * this->solver.sol.prime.variables.now.array() + this->obj.transformation.shift.array()).segment(this->statistic.num_node, this->statistic.num_node).transpose() << "\n";
+                std::cout << "\n";
            }
         }
 
@@ -575,6 +575,12 @@ namespace ADMM{
         network_struct network;
 
         std::vector <opf_struct> opf_sub;
+
+        void solve_root_many(double tol_prime, double tol_dual, bool print_flag = 1){
+            for(int network_iter = 1; network_iter < 3; ++ network_iter){
+                this->opf_sub[network_iter].solve_root(tol_prime, tol_dual, print_flag);
+            }
+        }
     };
 
     // Functions
