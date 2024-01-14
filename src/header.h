@@ -134,6 +134,8 @@ namespace ADMM{
             transform_struct transformation;
 
             std::vector <cost_func_struct> cost_funcs;
+
+            Eigen::Vector2d price_range;
         };
         obj_struct obj;
 
@@ -147,6 +149,20 @@ namespace ADMM{
             // f(x): cost function associated with V, S, and I (f(V) and f(I) are well functions)
 
             struct constraint_struct{
+                // Green function
+                struct green_func_struct{
+                    Eigen::MatrixXd voltage;
+                    Eigen::MatrixXd current;
+                };
+                green_func_struct green_func;
+
+                // Cost coeff
+                struct cost_coeff_struct{
+                    double voltage;
+                    double current;
+                };
+                cost_coeff_struct cost_coeff;
+
                 // Main matrix
                 Eigen::SparseMatrix <double> Matrix_main;
                 Eigen::SparseMatrix <double> PSD_main;
@@ -220,18 +236,37 @@ namespace ADMM{
         }
 
         // Main matrix initialization for DC OPF
-        void DC_Matrix_main_set(){
+        void DC_Matrix_main_set(bool left_vol_fix = 0, bool right_vol_fix = 0){
+            int num_variable_temp = this->statistic.num_variable - left_vol_fix - right_vol_fix;
+
             // Variables: V, S, I
             // Constraints: Node balance, line current
-            this->solver.constraint.Mat_main_terms = std::vector <std::vector <std::pair <int, double>>> (this->statistic.num_variable);
-            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
+            this->solver.constraint.Mat_main_terms = std::vector <std::vector <std::pair <int, double>>> (num_variable_temp);
+            for(int var_iter = 0; var_iter < num_variable_temp; ++ var_iter){
                 this->solver.constraint.Mat_main_terms[var_iter].reserve(this->statistic.num_constraint);
             }
-            this->solver.constraint.PSD_main_terms = std::vector <std::vector <std::pair <int, double>>> (this->statistic.num_variable);
-            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
-                this->solver.constraint.PSD_main_terms[var_iter].reserve(this->statistic.num_variable);
+            this->solver.constraint.PSD_main_terms = std::vector <std::vector <std::pair <int, double>>> (num_variable_temp);
+            for(int var_iter = 0; var_iter < num_variable_temp; ++ var_iter){
+                this->solver.constraint.PSD_main_terms[var_iter].reserve(num_variable_temp);
             }
-            this->solver.constraint.sensitivity_var = Eigen::VectorXd (this->statistic.num_variable);
+            this->solver.constraint.sensitivity_var = Eigen::VectorXd (num_variable_temp);
+
+            // Set the permutation matrix
+            int var_ID = 0;
+            Eigen::MatrixXd Permute = Eigen::MatrixXd::Zero(this->statistic.num_variable, num_variable_temp);
+            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
+                if(var_iter == 0 && left_vol_fix){
+                    continue;
+                }
+
+                if(var_iter == this->statistic.num_variable - 1 && right_vol_fix){
+                    continue;
+                }
+
+                Permute(var_iter, var_ID) = 1.;
+                var_ID += 1;
+            }
+            Eigen::SparseMatrix <double> Permute_sparse = Permute.sparseView();
 
             // Set the main matrix
             Eigen::MatrixXd Mat = Eigen::MatrixXd::Zero(this->statistic.num_constraint, this->statistic.num_variable);
@@ -271,6 +306,7 @@ namespace ADMM{
                 Diag_inv(var_iter, var_iter) = 1. / Diag(var_iter, var_iter);
             }
             Mat = Mat * Diag;
+            Mat = Mat * Permute;
             Eigen::MatrixXd PSD = Mat.transpose() * Mat;
 
             // Record non-zero terms for Mat
@@ -343,7 +379,10 @@ namespace ADMM{
             }
             Diagonal.setFromTriplets(Diagonal_trip.begin(), Diagonal_trip.end());
             this->solver.constraint.Matrix_main = this->solver.constraint.Matrix_main * Diagonal;
+            this->solver.constraint.Matrix_main = this->solver.constraint.Matrix_main * Permute_sparse;
             this->solver.constraint.PSD_main = this->solver.constraint.Matrix_main.transpose() * this->solver.constraint.Matrix_main;
+
+            this->statistic.num_variable -= left_vol_fix + right_vol_fix;
         }
 
         // Price gap set (rho must be fixed!!)
@@ -539,6 +578,6 @@ namespace ADMM{
     };
 
     // Functions
-    void radial_line_problem_split_set(opf_struct&, int, int, std::complex<double>, double, double, double);
+    void radial_line_problem_split_set(opf_structs&, int, int, std::complex<double>, double, double, double, bool, bool);
     void radial_line_problem_set(opf_struct&, int, int, std::complex<double>, double, double, double);
 }
