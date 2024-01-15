@@ -2,7 +2,7 @@
 #include "header.h"
 
 namespace ADMM{
-    void radial_line_problem_split_set(opf_structs &opfs, int num_node, int num_price, std::complex<double> y_l, double theta_limit, double current_limit, double total_load, bool left_vol_fix, bool right_vol_fix){
+    void radial_line_problem_split_set(opf_structs &opfs, int num_node, int num_price, std::complex<double> y_l, double theta_limit, double current_limit, double total_load){
         // Set full system statistic
         opfs.statistic.num_node = num_node;
         opfs.statistic.num_line = num_node - 1;
@@ -169,7 +169,7 @@ namespace ADMM{
 
             // Set solver
             opfs.opf_sub[network_iter].transformation_set(0);
-            opfs.opf_sub[network_iter].DC_Matrix_main_set(left_vol_fix, right_vol_fix);
+            opfs.opf_sub[network_iter].DC_Matrix_main_set(network_iter == 2, network_iter == 1);
 
             // Set cost functions
             opfs.opf_sub[network_iter].obj.cost_funcs = std::vector <opf_struct::obj_struct::cost_func_struct> (opfs.opf_sub[network_iter] .statistic.num_variable);
@@ -178,7 +178,7 @@ namespace ADMM{
             double quantity_inflex = 1000.;
 
             // Phase angle boundaries
-            int num_voltage = num_node - left_vol_fix - right_vol_fix;
+            int num_voltage = num_node - (network_iter == 2) - (network_iter == 1);
             for(int node_iter = 0; node_iter < num_voltage; ++ node_iter){
                 int var_ID = node_iter;
 

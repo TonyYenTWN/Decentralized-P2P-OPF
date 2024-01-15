@@ -259,7 +259,7 @@ namespace ADMM{
                     continue;
                 }
 
-                if(var_iter == this->statistic.num_variable - 1 && right_vol_fix){
+                if(var_iter == this->statistic.num_node - 1 && right_vol_fix){
                     continue;
                 }
 
@@ -309,8 +309,12 @@ namespace ADMM{
             Mat = Mat * Permute;
             Eigen::MatrixXd PSD = Mat.transpose() * Mat;
 
+            // Turn dense to sparse matrix
+            this->solver.constraint.Matrix_main = Mat.sparseView();
+            this->solver.constraint.PSD_main = PSD.sparseView();
+
             // Record non-zero terms for Mat
-            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
+            for(int var_iter = 0; var_iter < num_variable_temp; ++ var_iter){
                 for(int constr_iter = 0; constr_iter < this->statistic.num_constraint; ++ constr_iter){
                     if(Mat(constr_iter, var_iter) != 0.){
                         this->solver.constraint.Mat_main_terms[var_iter].push_back(std::pair <int, double> (constr_iter, Mat(constr_iter, var_iter)));
@@ -319,8 +323,8 @@ namespace ADMM{
             }
 
             // Record non-zero terms for PSD
-            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
-                for(int row_iter = 0; row_iter < this->statistic.num_variable; ++ row_iter){
+            for(int var_iter = 0; var_iter < num_variable_temp; ++ var_iter){
+                for(int row_iter = 0; row_iter < num_variable_temp; ++ row_iter){
                     if(PSD(row_iter, var_iter) != 0.){
                         if(row_iter == var_iter){
                             this->solver.constraint.sensitivity_var(var_iter) = PSD(row_iter, var_iter);
@@ -332,55 +336,58 @@ namespace ADMM{
                 }
             }
 
-            ////////////////////////////////////////////////////////////////////////
-            int num_entry = this->statistic.num_node + 5 * this->statistic.num_line;
-
-            // Set the main matrix
-            this->solver.constraint.Matrix_main = Eigen::SparseMatrix <double> (this->statistic.num_constraint, this->statistic.num_variable);
-            std::vector <Eigen::Triplet <double>> Matrix_main_trip;
-            Matrix_main_trip.reserve(num_entry);
-
-            // Node Balance Equation
-            // S - t(NL) %*% I = 0
-            for(int node_iter = 0; node_iter < this->statistic.num_node; ++ node_iter){
-                int var_ID = this->statistic.num_node + node_iter;
-                Matrix_main_trip.push_back(Eigen::Triplet <double> (node_iter, var_ID, 1));
-            }
-            for(int line_iter = 0; line_iter < this->statistic.num_line; ++ line_iter){
-                int var_ID = 2 * this->statistic.num_node + line_iter;
-                Matrix_main_trip.push_back(Eigen::Triplet <double> (this->network.topology[line_iter](0), var_ID, -1));
-                Matrix_main_trip.push_back(Eigen::Triplet <double> (this->network.topology[line_iter](1), var_ID, 1));
-            }
-
-            // Line Current Equation
-            // Y_l %*% NL %*% V - I = 0
-            for(int line_iter = 0; line_iter < this->statistic.num_line; ++ line_iter){
-                int var_ID = 2 * this->statistic.num_node + line_iter;
-                int constr_ID = this->statistic.num_node + line_iter;
-                double y_l = this->network.line_conductance(line_iter).imag();
-
-                Matrix_main_trip.push_back(Eigen::Triplet <double> (constr_ID, this->network.topology[line_iter](0), y_l));
-                Matrix_main_trip.push_back(Eigen::Triplet <double> (constr_ID, this->network.topology[line_iter](1), -y_l));
-                Matrix_main_trip.push_back(Eigen::Triplet <double> (constr_ID, var_ID, -1));
-            }
-
-            // Put Everything in to the matrix
-            this->solver.constraint.Matrix_main.setFromTriplets(Matrix_main_trip.begin(), Matrix_main_trip.end());
-
-            // Set boundary for equality constraints
-            this->solver.constraint.boundary = -this->solver.constraint.Matrix_main * this->obj.transformation.shift;
-
-            // Apply transformation to the matrix
-            Eigen::SparseMatrix <double> Diagonal(this->statistic.num_variable, this->statistic.num_variable);
-            std::vector <Eigen::Triplet <double>> Diagonal_trip;
-            Diagonal_trip.reserve(this->statistic.num_variable);
-            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
-                Diagonal_trip.push_back(Eigen::Triplet <double> (var_iter, var_iter, this->obj.transformation.scale(var_iter)));
-            }
-            Diagonal.setFromTriplets(Diagonal_trip.begin(), Diagonal_trip.end());
-            this->solver.constraint.Matrix_main = this->solver.constraint.Matrix_main * Diagonal;
-            this->solver.constraint.Matrix_main = this->solver.constraint.Matrix_main * Permute_sparse;
-            this->solver.constraint.PSD_main = this->solver.constraint.Matrix_main.transpose() * this->solver.constraint.Matrix_main;
+//            ////////////////////////////////////////////////////////////////////////
+//            int num_entry = this->statistic.num_node + 5 * this->statistic.num_line;
+//
+//            // Set the main matrix
+//            this->solver.constraint.Matrix_main = Eigen::SparseMatrix <double> (this->statistic.num_constraint, this->statistic.num_variable);
+//            std::vector <Eigen::Triplet <double>> Matrix_main_trip;
+//            Matrix_main_trip.reserve(num_entry);
+//            int num_voltage = this->statistic.num_node - left_vol_fix - right_vol_fix;
+//
+//            // Node Balance Equation
+//            // S - t(NL) %*% I = 0
+//            for(int node_iter = 0; node_iter < this->statistic.num_node; ++ node_iter){
+//                int var_ID = num_voltage + node_iter;
+//                Matrix_main_trip.push_back(Eigen::Triplet <double> (node_iter, var_ID, 1));
+//            }
+//            for(int line_iter = 0; line_iter < this->statistic.num_line; ++ line_iter){
+//                int var_ID = num_voltage + this->statistic.num_node + line_iter;
+//                Matrix_main_trip.push_back(Eigen::Triplet <double> (this->network.topology[line_iter](0), var_ID, -1));
+//                Matrix_main_trip.push_back(Eigen::Triplet <double> (this->network.topology[line_iter](1), var_ID, 1));
+//            }
+//
+//            // Line Current Equation
+//            // Y_l %*% NL %*% V - I = 0
+//            for(int line_iter = 0; line_iter < this->statistic.num_line; ++ line_iter){
+//                int var_ID = num_voltage + this->statistic.num_node + line_iter;
+//                int constr_ID = this->statistic.num_node + line_iter;
+//                double y_l = this->network.line_conductance(line_iter).imag();
+//
+//                Matrix_main_trip.push_back(Eigen::Triplet <double> (constr_ID, this->network.topology[line_iter](0), y_l));
+//                Matrix_main_trip.push_back(Eigen::Triplet <double> (constr_ID, this->network.topology[line_iter](1), -y_l));
+//                Matrix_main_trip.push_back(Eigen::Triplet <double> (constr_ID, var_ID, -1));
+//            }
+//
+//            // Put Everything in to the matrix
+//            this->solver.constraint.Matrix_main.setFromTriplets(Matrix_main_trip.begin(), Matrix_main_trip.end());
+//
+//            // Set boundary for equality constraints
+//            this->solver.constraint.boundary = -this->solver.constraint.Matrix_main * this->obj.transformation.shift;
+//
+//            // Apply transformation to the matrix
+//            Eigen::SparseMatrix <double> Diagonal(this->statistic.num_variable, this->statistic.num_variable);
+//            std::vector <Eigen::Triplet <double>> Diagonal_trip;
+//            Diagonal_trip.reserve(this->statistic.num_variable);
+//            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
+//                Diagonal_trip.push_back(Eigen::Triplet <double> (var_iter, var_iter, this->obj.transformation.scale(var_iter)));
+//            }
+//            Diagonal.setFromTriplets(Diagonal_trip.begin(), Diagonal_trip.end());
+//            this->solver.constraint.Matrix_main = this->solver.constraint.Matrix_main * Diagonal;
+//            this->solver.constraint.Matrix_main = this->solver.constraint.Matrix_main * Permute_sparse;
+//            this->solver.constraint.PSD_main = this->solver.constraint.Matrix_main.transpose() * this->solver.constraint.Matrix_main;
+//            std::cout <<  Mat << "\n\n";
+//            std::cout << this->solver.constraint.Matrix_main << "\n\n";
 
             this->statistic.num_variable -= left_vol_fix + right_vol_fix;
         }
@@ -584,6 +591,6 @@ namespace ADMM{
     };
 
     // Functions
-    void radial_line_problem_split_set(opf_structs&, int, int, std::complex<double>, double, double, double, bool, bool);
+    void radial_line_problem_split_set(opf_structs&, int, int, std::complex<double>, double, double, double);
     void radial_line_problem_set(opf_struct&, int, int, std::complex<double>, double, double, double);
 }

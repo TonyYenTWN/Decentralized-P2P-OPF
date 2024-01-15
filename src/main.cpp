@@ -13,8 +13,8 @@ int main()
     double total_load = 2.;
 
     ADMM::opf_structs opfs;
-    radial_line_problem_split_set(opfs, num_node, num_price, y_l, theta_limit, I_limit, total_load, 0, 0);
-    opfs.solve_root_many(1E-6, 1E-6, 1);
+    radial_line_problem_split_set(opfs, num_node, num_price, y_l, theta_limit, I_limit, total_load);
+//    opfs.solve_root_many(1E-6, 1E-6, 1);
 
 //    ADMM::opf_struct opf;
 //    radial_line_problem_set(opf, num_node, num_price, y_l, theta_limit, I_limit, total_load);
