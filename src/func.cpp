@@ -24,6 +24,9 @@ namespace ADMM{
 
         // Set second level of network
         for(int network_iter = 1; network_iter < 3; ++ network_iter){
+            bool left_vol_fix = network_iter == 2;
+            bool right_vol_fix = network_iter == 1;
+
             // Set systems statistic
             opfs.opf_sub[network_iter].network.network_map.current_level = 1;
             opfs.opf_sub[network_iter].statistic.num_node = opfs.statistic.num_node / 2;
@@ -169,7 +172,7 @@ namespace ADMM{
 
             // Set solver
             opfs.opf_sub[network_iter].transformation_set(0);
-            opfs.opf_sub[network_iter].DC_Matrix_main_set(network_iter == 2, network_iter == 1);
+            opfs.opf_sub[network_iter].DC_Matrix_main_set(left_vol_fix, right_vol_fix);
 
             // Set cost functions
             opfs.opf_sub[network_iter].obj.cost_funcs = std::vector <opf_struct::obj_struct::cost_func_struct> (opfs.opf_sub[network_iter] .statistic.num_variable);
@@ -178,7 +181,7 @@ namespace ADMM{
             double quantity_inflex = 1000.;
 
             // Phase angle boundaries
-            int num_voltage = num_node - (network_iter == 2) - (network_iter == 1);
+            int num_voltage = num_node - left_vol_fix - right_vol_fix;
             for(int node_iter = 0; node_iter < num_voltage; ++ node_iter){
                 int var_ID = node_iter;
 
