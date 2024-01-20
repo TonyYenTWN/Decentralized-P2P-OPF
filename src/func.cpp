@@ -223,19 +223,19 @@ namespace ADMM{
 
             // Power source / sink cost functions
             // First node is source node
-            opfs.opf_sub[network_iter].obj.cost_funcs[num_node].supply.price = Eigen::VectorXd(3);
-            opfs.opf_sub[network_iter].obj.cost_funcs[num_node].supply.quantity = Eigen::VectorXd(3);
-            opfs.opf_sub[network_iter].obj.cost_funcs[num_node].supply.price << -std::numeric_limits<double>::infinity(), 0., std::numeric_limits<double>::infinity();
-            opfs.opf_sub[network_iter].obj.cost_funcs[num_node].supply.quantity << 0., total_load, 0.;
-            opfs.opf_sub[network_iter].obj.cost_funcs[num_node].demand.price = Eigen::VectorXd(2);
-            opfs.opf_sub[network_iter].obj.cost_funcs[num_node].demand.quantity = Eigen::VectorXd::Zero(2);
-            opfs.opf_sub[network_iter].obj.cost_funcs[num_node].demand.price << -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity();
-            opfs.opf_sub[network_iter].obj.cost_funcs[num_node].moc_set();
+            opfs.opf_sub[network_iter].obj.cost_funcs[num_voltage].supply.price = Eigen::VectorXd(3);
+            opfs.opf_sub[network_iter].obj.cost_funcs[num_voltage].supply.quantity = Eigen::VectorXd(3);
+            opfs.opf_sub[network_iter].obj.cost_funcs[num_voltage].supply.price << -std::numeric_limits<double>::infinity(), 0., std::numeric_limits<double>::infinity();
+            opfs.opf_sub[network_iter].obj.cost_funcs[num_voltage].supply.quantity << 0., total_load, 0.;
+            opfs.opf_sub[network_iter].obj.cost_funcs[num_voltage].demand.price = Eigen::VectorXd(2);
+            opfs.opf_sub[network_iter].obj.cost_funcs[num_voltage].demand.quantity = Eigen::VectorXd::Zero(2);
+            opfs.opf_sub[network_iter].obj.cost_funcs[num_voltage].demand.price << -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity();
+            opfs.opf_sub[network_iter].obj.cost_funcs[num_voltage].moc_set();
 
             // Other nodes are sink node
             double node_load = total_load / (num_node - 1) / num_price;
             for(int node_iter = 1; node_iter < num_node; ++ node_iter){
-                int var_ID = num_node + node_iter;
+                int var_ID = num_voltage + node_iter;
 
                 // Set bid functions for suuply
                 opfs.opf_sub[network_iter].obj.cost_funcs[var_ID].supply.price = Eigen::VectorXd(2);
