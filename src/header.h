@@ -156,6 +156,7 @@ namespace ADMM{
                 std::vector <std::vector <std::pair <int, double>>> Mat_main_terms;
                 std::vector <std::vector <std::pair <int, double>>> PSD_main_terms;
                 Eigen::VectorXd sensitivity_var;
+                Eigen::VectorXd boundary_0;
                 Eigen::VectorXd boundary;
             };
             constraint_struct constraint;
@@ -320,9 +321,12 @@ namespace ADMM{
                 Mat(constr_ID, var_ID) = -1.;
             }
 
-
-            // Set boundary for equality constraints
-            this->solver.constraint.boundary = -Mat * this->obj.transformation.shift;
+            // Set boundary for equality constraints; transformation considered
+            // Ax = c
+            // A(mx' + x_0) = c
+            // [A][m]x' = c - A * x_0
+            this->solver.constraint.boundary_0 = -Mat * this->obj.transformation.shift;
+            this->solver.constraint.boundary = this->solver.constraint.boundary_0;
 
             // Apply transformation to the matrix
             Eigen::MatrixXd Diag = Eigen::MatrixXd::Zero(this->statistic.num_variable, this->statistic.num_variable);
@@ -362,6 +366,14 @@ namespace ADMM{
             }
         }
 
+        // Update boundary terms
+        // Only works for bisplit now!!
+        void boundary_update(double boundary_current = 0., bool right_end = 1){
+            int node_ID = right_end * this->statistic.num_node;
+            this->solver.constraint.boundary(node_ID) = this->solver.constraint.boundary_0(node_ID);
+            this->solver.constraint.boundary(node_ID) += boundary_current * (2 * right_end - 1);
+        }
+
         // Price gap set (rho must be fixed!!)
         void price_gap_set(double rho){
             for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
@@ -395,6 +407,7 @@ namespace ADMM{
                     entry_iter += 1;
                 }
 
+                // Bisection method for finding KKT point
                 Eigen::Vector2i gap_price_ID(0, this->obj.cost_funcs[var_iter].moc.price.size() - 1);
                 int mid_price_ID = gap_price_ID.sum() / 2;
                 while(gap_price_ID(1) - gap_price_ID(0) > 1){
@@ -503,10 +516,44 @@ namespace ADMM{
                 loop += 1;
             }
 
+            // Calculate objective value
+            this->solver.sol.obj_value = 0.;
+            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
+                // Bisection method for finding location of solution
+                Eigen::Vector2i gap_price_ID(0, this->obj.cost_funcs[var_iter].moc.price.size() - 1);
+                int mid_price_ID = gap_price_ID.sum() / 2;
+                Eigen::Vector2d gap_rent;
+                while(gap_price_ID(1) - gap_price_ID(0) > 1){
+                    gap_rent(0) = this->obj.cost_funcs[var_iter].moc.quantity(gap_price_ID(0)) - this->solver.sol.prime.variables.now(var_iter);
+                    gap_rent(1) = this->obj.cost_funcs[var_iter].moc.quantity(gap_price_ID(1)) - this->solver.sol.prime.variables.now(var_iter);
+
+                    double mid_rent;
+                    mid_rent = this->obj.cost_funcs[var_iter].moc.quantity(mid_price_ID) - this->solver.sol.prime.variables.now(var_iter);
+
+                    // Bisection root-search method
+                    if(mid_rent * gap_rent(0) <= 0){
+                        gap_price_ID(1) = mid_price_ID;
+                    }
+                    else{
+                        gap_price_ID(0) = mid_price_ID;
+                    }
+
+                    mid_price_ID = gap_price_ID.sum() / 2;
+                }
+
+                double obj_temp = 0.;
+                obj_temp += this->obj.cost_funcs[var_iter].moc.obj(gap_price_ID(0)) * gap_rent(1);
+                obj_temp -= this->obj.cost_funcs[var_iter].moc.obj(gap_price_ID(1)) * gap_rent(0);
+                obj_temp /= gap_rent(1) - gap_rent(0);
+
+                this->solver.sol.obj_value += obj_temp;
+            }
+
             if(print_flag){
                 std::cout << "Total loop:\t" << loop << "\n";
                 std::cout << "Prime Error:\t" << this->solver.sol.prime.error.norm() / this->solver.sol.prime.error.size() << "\n";
                 std::cout << "Dual Error:\t" << this->solver.sol.dual.error.norm() / this->solver.sol.dual.error.size() << "\n";
+                std::cout << "Objective value:\t" << this->solver.sol.obj_value << "\n";
                 std::cout << "Solution:\n";
                 std::cout << (this->obj.transformation.scale.array() * this->solver.sol.prime.variables.now.array() + this->obj.transformation.shift.array()).segment(this->statistic.num_node, this->statistic.num_node).transpose() << "\n";
                 std::cout << "\n";
@@ -552,14 +599,35 @@ namespace ADMM{
 
         std::vector <opf_struct> opf_sub;
 
-        void solve_root_many(double tol_prime, double tol_dual, bool print_flag = 1){
+        void solve_root_many(double tol_prime, double tol_dual, double boundary_current, bool print_flag = 1){
             for(int network_iter = 0; network_iter <  this->opf_sub.size(); ++ network_iter){
+                this->opf_sub[network_iter].boundary_update(boundary_current, (network_iter == 0));
                 this->opf_sub[network_iter].solve_root(tol_prime, tol_dual, print_flag);
+            }
+        }
+
+        void solve_root_many_iteration(int loop_limit, double tol_prime, double tol_dual, double I_limit, bool print_flag = 1){
+            Eigen::VectorXd obj_guess(3);
+            Eigen::VectorXd I_guess(3);
+            double dI = I_limit / 2.;
+            I_guess << -dI, 0., dI;
+
+            for(int dI_iter = 0; dI_iter < I_guess.size(); ++ dI_iter){
+//                this->solve_root_many(tol_prime, tol_dual, I_guess(dI_iter), 1);
+//                double obj_temp = 0.;
+//
+//                for(int network_iter = 0; network_iter < this->opf_sub.size(); ++ network_iter){
+//                    obj_temp += this->opf_sub[network_iter].solver.sol.obj_value;
+//                }
+//
+//                obj_guess(dI_iter) = obj_temp;
+//
+//                std::cout << I_guess(dI_iter) << ":\t" << obj_guess(dI_iter) << "\n";
             }
         }
     };
 
     // Functions
-    void radial_line_problem_split_set(opf_structs&, int, int, std::complex<double>, double, double, double, double);
+    void radial_line_problem_split_set(opf_structs&, int, int, int, std::complex<double>, double, double, double, double);
     void radial_line_problem_set(opf_struct&, int, int, std::complex<double>, double, double, double, double);
 }

@@ -2,11 +2,11 @@
 #include "header.h"
 
 namespace ADMM{
-    void radial_line_problem_split_set(opf_structs &opfs, int num_node, int num_price, std::complex<double> y_l, double theta_limit, double current_limit, double total_load, double penalty_price_voltage){
+    void radial_line_problem_split_set(opf_structs &opfs, int num_sub, int num_node, int num_price, std::complex<double> y_l, double theta_limit, double current_limit, double total_load, double penalty_price_voltage){
         // Set full system statistic
         opfs.statistic.num_node = num_node;
         opfs.statistic.num_line = num_node - 1;
-        opfs.opf_sub = std::vector <opf_struct> (2);
+        opfs.opf_sub = std::vector <opf_struct> (num_sub);
         int num_line_total = opfs.statistic.num_line;
 
         // Initialize subnetworks
@@ -14,7 +14,7 @@ namespace ADMM{
         for(int network_iter = 0; network_iter < opfs.opf_sub.size(); ++ network_iter){
             // Set systems statistic
             opfs.opf_sub[network_iter].statistic.num_node = opfs.statistic.num_node / opfs.opf_sub.size();
-            if(network_iter == opfs.opf_sub.size()){
+            if(network_iter == opfs.opf_sub.size() - 1){
                 opfs.opf_sub[network_iter].statistic.num_node += opfs.statistic.num_node % opfs.opf_sub.size();
             }
             opfs.opf_sub[network_iter].statistic.num_line = opfs.opf_sub[network_iter].statistic.num_node - 1;
@@ -67,7 +67,7 @@ namespace ADMM{
             }
 
             // Set solver
-            opfs.opf_sub[network_iter].transformation_set(0);
+            opfs.opf_sub[network_iter].transformation_set();
             opfs.opf_sub[network_iter].DC_Matrix_main_set();
         }
     }
@@ -122,7 +122,7 @@ namespace ADMM{
         }
 
         // Set solver
-        opf.transformation_set(0);
+        opf.transformation_set();
         opf.DC_Matrix_main_set();
     }
 }
