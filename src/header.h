@@ -70,6 +70,7 @@ namespace ADMM{
                 };
                 moc_struct moc;
 
+                // Function to merit order curve
                 void moc_set(){
                     int num_row = 2 * (this->demand.price.size() + this->supply.price.size() - 3);
                     this->moc.price = Eigen::VectorXd(num_row);
@@ -149,20 +150,6 @@ namespace ADMM{
             // f(x): cost function associated with V, S, and I (f(V) and f(I) are well functions)
 
             struct constraint_struct{
-                // Green function
-                struct green_func_struct{
-                    Eigen::MatrixXd voltage;
-                    Eigen::MatrixXd current;
-                };
-                green_func_struct green_func;
-
-                // Cost coeff
-                struct cost_coeff_struct{
-                    double voltage;
-                    double current;
-                };
-                cost_coeff_struct cost_coeff;
-
                 // Main matrix
                 Eigen::SparseMatrix <double> Matrix_main;
                 Eigen::SparseMatrix <double> PSD_main;
@@ -179,7 +166,6 @@ namespace ADMM{
                     struct variable_struct{
                         Eigen::VectorXd now;
                         Eigen::VectorXd prev;
-                        Eigen::VectorXd temp;
                     };
                     variable_struct variables;
                     Eigen::VectorXd price_margin;
@@ -200,6 +186,7 @@ namespace ADMM{
             this->statistic.num_constraint = factor * (this->statistic.num_node + this->statistic.num_line);
         }
 
+        // Linear transformation of the variables and objective coefficients
         void transformation_set(bool flag = 1){
             // transformation:
             // x' = 1 / m * (x - x_0)
@@ -224,49 +211,87 @@ namespace ADMM{
                 this->obj.cost_funcs[var_iter].moc.quantity /= this->obj.transformation.scale(var_iter);
                 this->obj.cost_funcs[var_iter].moc.price *= this->obj.transformation.scale(var_iter);
             }
+        }
 
-            this->obj.transformation.obj = 0.;
-            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
-                this->obj.transformation.obj = std::max(this->obj.transformation.obj, abs(this->obj.cost_funcs[var_iter].moc.price[this->obj.cost_funcs[var_iter].moc.price.size() - 2]));
+        // Initialize merit order curves and set values for voltage and current
+        void moc_initialize(double theta_limit, double current_limit, double penalty_price_voltage){
+            this->obj.cost_funcs = std::vector <obj_struct::cost_func_struct> (this->statistic.num_variable);
+            this->obj.price_range << -500., 3000.;
+            double price_gap = 1.05 * (this->obj.price_range(1) - this->obj.price_range(0));
+            double quantity_inflex = 1000.;
+
+            // Line current boundaries
+            for(int line_iter = 0; line_iter < this->statistic.num_line; ++ line_iter){
+                int var_ID = 2 * this->statistic.num_node + line_iter;
+
+                // Set bid functions for suuply
+                this->obj.cost_funcs[var_ID].supply.price = Eigen::VectorXd(4);
+                this->obj.cost_funcs[var_ID].supply.quantity = Eigen::VectorXd::Zero(4);
+                this->obj.cost_funcs[var_ID].supply.price << -std::numeric_limits<double>::infinity(), 0., price_gap, std::numeric_limits<double>::infinity();
+                this->obj.cost_funcs[var_ID].supply.quantity << 0., current_limit, quantity_inflex, 0.;
+
+                // Set bid functions for demand
+                this->obj.cost_funcs[var_ID].demand.price = Eigen::VectorXd(4);
+                this->obj.cost_funcs[var_ID].demand.quantity = Eigen::VectorXd(4);
+                this->obj.cost_funcs[var_ID].demand.price << -std::numeric_limits<double>::infinity(), -price_gap, 0., std::numeric_limits<double>::infinity();
+                this->obj.cost_funcs[var_ID].demand.quantity << 0., quantity_inflex, current_limit, 0.;
+
+                // Set merit order curve for residual load
+                this->obj.cost_funcs[var_ID].moc_set();
             }
-            this->obj.transformation.obj *= 10.;
-            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
-                this->obj.cost_funcs[var_iter].moc.price = this->obj.cost_funcs[var_iter].moc.price / this->obj.transformation.obj;
+
+            if(penalty_price_voltage == std::numeric_limits<double>::infinity()){
+                // Phase angle boundaries
+                for(int node_iter = 0; node_iter < this->statistic.num_node; ++ node_iter){
+                    int var_ID = node_iter;
+                    opf_struct::obj_struct::cost_func_struct cost_func;
+                    cost_func.moc.price = Eigen::VectorXd(4);
+                    cost_func.moc.quantity = Eigen::VectorXd(4);
+                    cost_func.moc.obj = Eigen::VectorXd::Zero(4);
+
+                    cost_func.moc.price << -std::numeric_limits<double>::infinity(), 0., 0., std::numeric_limits<double>::infinity();
+                    cost_func.moc.quantity << -theta_limit, -theta_limit, theta_limit, theta_limit;
+
+                    this->obj.cost_funcs[var_ID] = cost_func;
+                }
+
+                return;
+            }
+
+            // Phase angle boundaries
+            for(int node_iter = 0; node_iter < this->statistic.num_node; ++ node_iter){
+                int var_ID = node_iter;
+
+                // Set bid functions for suuply
+                this->obj.cost_funcs[var_ID].supply.price = Eigen::VectorXd(4);
+                this->obj.cost_funcs[var_ID].supply.quantity = Eigen::VectorXd::Zero(4);
+                this->obj.cost_funcs[var_ID].supply.price << -std::numeric_limits<double>::infinity(), 0., penalty_price_voltage, std::numeric_limits<double>::infinity();
+                this->obj.cost_funcs[var_ID].supply.quantity << 0., theta_limit, quantity_inflex, 0.;
+
+                // Set bid functions for demand
+                this->obj.cost_funcs[var_ID].demand.price = Eigen::VectorXd(4);
+                this->obj.cost_funcs[var_ID].demand.quantity = Eigen::VectorXd(4);
+                this->obj.cost_funcs[var_ID].demand.price << -std::numeric_limits<double>::infinity(), -penalty_price_voltage, 0., std::numeric_limits<double>::infinity();
+                this->obj.cost_funcs[var_ID].demand.quantity << 0., quantity_inflex, theta_limit, 0.;
+
+                // Set merit order curve for residual load
+                this->obj.cost_funcs[var_ID].moc_set();
             }
         }
 
         // Main matrix initialization for DC OPF
-        void DC_Matrix_main_set(bool left_vol_fix = 0, bool right_vol_fix = 0){
-            int num_variable_temp = this->statistic.num_variable - left_vol_fix - right_vol_fix;
-
+        void DC_Matrix_main_set(){
             // Variables: V, S, I
             // Constraints: Node balance, line current
-            this->solver.constraint.Mat_main_terms = std::vector <std::vector <std::pair <int, double>>> (num_variable_temp);
-            for(int var_iter = 0; var_iter < num_variable_temp; ++ var_iter){
+            this->solver.constraint.Mat_main_terms = std::vector <std::vector <std::pair <int, double>>> (this->statistic.num_variable);
+            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
                 this->solver.constraint.Mat_main_terms[var_iter].reserve(this->statistic.num_constraint);
             }
-            this->solver.constraint.PSD_main_terms = std::vector <std::vector <std::pair <int, double>>> (num_variable_temp);
-            for(int var_iter = 0; var_iter < num_variable_temp; ++ var_iter){
-                this->solver.constraint.PSD_main_terms[var_iter].reserve(num_variable_temp);
-            }
-            this->solver.constraint.sensitivity_var = Eigen::VectorXd (num_variable_temp);
-
-            // Set the permutation matrix
-            int var_ID = 0;
-            Eigen::MatrixXd Permute = Eigen::MatrixXd::Zero(this->statistic.num_variable, num_variable_temp);
+            this->solver.constraint.PSD_main_terms = std::vector <std::vector <std::pair <int, double>>> (this->statistic.num_variable);
             for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
-                if(var_iter == 0 && left_vol_fix){
-                    continue;
-                }
-
-                if(var_iter == this->statistic.num_node - 1 && right_vol_fix){
-                    continue;
-                }
-
-                Permute(var_iter, var_ID) = 1.;
-                var_ID += 1;
+                this->solver.constraint.PSD_main_terms[var_iter].reserve(this->statistic.num_variable);
             }
-            Eigen::SparseMatrix <double> Permute_sparse = Permute.sparseView();
+            this->solver.constraint.sensitivity_var = Eigen::VectorXd (this->statistic.num_variable);
 
             // Set the main matrix
             Eigen::MatrixXd Mat = Eigen::MatrixXd::Zero(this->statistic.num_constraint, this->statistic.num_variable);
@@ -295,6 +320,7 @@ namespace ADMM{
                 Mat(constr_ID, var_ID) = -1.;
             }
 
+
             // Set boundary for equality constraints
             this->solver.constraint.boundary = -Mat * this->obj.transformation.shift;
 
@@ -306,7 +332,6 @@ namespace ADMM{
                 Diag_inv(var_iter, var_iter) = 1. / Diag(var_iter, var_iter);
             }
             Mat = Mat * Diag;
-            Mat = Mat * Permute;
             Eigen::MatrixXd PSD = Mat.transpose() * Mat;
 
             // Turn dense to sparse matrix
@@ -314,7 +339,7 @@ namespace ADMM{
             this->solver.constraint.PSD_main = PSD.sparseView();
 
             // Record non-zero terms for Mat
-            for(int var_iter = 0; var_iter < num_variable_temp; ++ var_iter){
+            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
                 for(int constr_iter = 0; constr_iter < this->statistic.num_constraint; ++ constr_iter){
                     if(Mat(constr_iter, var_iter) != 0.){
                         this->solver.constraint.Mat_main_terms[var_iter].push_back(std::pair <int, double> (constr_iter, Mat(constr_iter, var_iter)));
@@ -323,8 +348,8 @@ namespace ADMM{
             }
 
             // Record non-zero terms for PSD
-            for(int var_iter = 0; var_iter < num_variable_temp; ++ var_iter){
-                for(int row_iter = 0; row_iter < num_variable_temp; ++ row_iter){
+            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
+                for(int row_iter = 0; row_iter < this->statistic.num_variable; ++ row_iter){
                     if(PSD(row_iter, var_iter) != 0.){
                         if(row_iter == var_iter){
                             this->solver.constraint.sensitivity_var(var_iter) = PSD(row_iter, var_iter);
@@ -335,61 +360,6 @@ namespace ADMM{
                     }
                 }
             }
-
-//            ////////////////////////////////////////////////////////////////////////
-//            int num_entry = this->statistic.num_node + 5 * this->statistic.num_line;
-//
-//            // Set the main matrix
-//            this->solver.constraint.Matrix_main = Eigen::SparseMatrix <double> (this->statistic.num_constraint, this->statistic.num_variable);
-//            std::vector <Eigen::Triplet <double>> Matrix_main_trip;
-//            Matrix_main_trip.reserve(num_entry);
-//            int num_voltage = this->statistic.num_node - left_vol_fix - right_vol_fix;
-//
-//            // Node Balance Equation
-//            // S - t(NL) %*% I = 0
-//            for(int node_iter = 0; node_iter < this->statistic.num_node; ++ node_iter){
-//                int var_ID = num_voltage + node_iter;
-//                Matrix_main_trip.push_back(Eigen::Triplet <double> (node_iter, var_ID, 1));
-//            }
-//            for(int line_iter = 0; line_iter < this->statistic.num_line; ++ line_iter){
-//                int var_ID = num_voltage + this->statistic.num_node + line_iter;
-//                Matrix_main_trip.push_back(Eigen::Triplet <double> (this->network.topology[line_iter](0), var_ID, -1));
-//                Matrix_main_trip.push_back(Eigen::Triplet <double> (this->network.topology[line_iter](1), var_ID, 1));
-//            }
-//
-//            // Line Current Equation
-//            // Y_l %*% NL %*% V - I = 0
-//            for(int line_iter = 0; line_iter < this->statistic.num_line; ++ line_iter){
-//                int var_ID = num_voltage + this->statistic.num_node + line_iter;
-//                int constr_ID = this->statistic.num_node + line_iter;
-//                double y_l = this->network.line_conductance(line_iter).imag();
-//
-//                Matrix_main_trip.push_back(Eigen::Triplet <double> (constr_ID, this->network.topology[line_iter](0), y_l));
-//                Matrix_main_trip.push_back(Eigen::Triplet <double> (constr_ID, this->network.topology[line_iter](1), -y_l));
-//                Matrix_main_trip.push_back(Eigen::Triplet <double> (constr_ID, var_ID, -1));
-//            }
-//
-//            // Put Everything in to the matrix
-//            this->solver.constraint.Matrix_main.setFromTriplets(Matrix_main_trip.begin(), Matrix_main_trip.end());
-//
-//            // Set boundary for equality constraints
-//            this->solver.constraint.boundary = -this->solver.constraint.Matrix_main * this->obj.transformation.shift;
-//
-//            // Apply transformation to the matrix
-//            Eigen::SparseMatrix <double> Diagonal(this->statistic.num_variable, this->statistic.num_variable);
-//            std::vector <Eigen::Triplet <double>> Diagonal_trip;
-//            Diagonal_trip.reserve(this->statistic.num_variable);
-//            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
-//                Diagonal_trip.push_back(Eigen::Triplet <double> (var_iter, var_iter, this->obj.transformation.scale(var_iter)));
-//            }
-//            Diagonal.setFromTriplets(Diagonal_trip.begin(), Diagonal_trip.end());
-//            this->solver.constraint.Matrix_main = this->solver.constraint.Matrix_main * Diagonal;
-//            this->solver.constraint.Matrix_main = this->solver.constraint.Matrix_main * Permute_sparse;
-//            this->solver.constraint.PSD_main = this->solver.constraint.Matrix_main.transpose() * this->solver.constraint.Matrix_main;
-//            std::cout <<  Mat << "\n\n";
-//            std::cout << this->solver.constraint.Matrix_main << "\n\n";
-
-            this->statistic.num_variable -= left_vol_fix + right_vol_fix;
         }
 
         // Price gap set (rho must be fixed!!)
@@ -524,7 +494,6 @@ namespace ADMM{
                     int sys_show = (int) 7. - log(this->statistic.num_variable) / log(10.);
                     sys_show = std::max(sys_show, 0);
                     if(loop % (int) pow(10., sys_show) == 0){
-//                    if(loop % 1 == 0){
                         std::cout << "Loop:\t" << loop << "\n";
                         std::cout << "Prime Error:\t" << prime_error_norm << "\n";
                         std::cout << "Dual Error:\t" << dual_error_norm << "\n";
@@ -584,13 +553,13 @@ namespace ADMM{
         std::vector <opf_struct> opf_sub;
 
         void solve_root_many(double tol_prime, double tol_dual, bool print_flag = 1){
-            for(int network_iter = 1; network_iter < 3; ++ network_iter){
+            for(int network_iter = 0; network_iter <  this->opf_sub.size(); ++ network_iter){
                 this->opf_sub[network_iter].solve_root(tol_prime, tol_dual, print_flag);
             }
         }
     };
 
     // Functions
-    void radial_line_problem_split_set(opf_structs&, int, int, std::complex<double>, double, double, double);
-    void radial_line_problem_set(opf_struct&, int, int, std::complex<double>, double, double, double);
+    void radial_line_problem_split_set(opf_structs&, int, int, std::complex<double>, double, double, double, double);
+    void radial_line_problem_set(opf_struct&, int, int, std::complex<double>, double, double, double, double);
 }
