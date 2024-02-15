@@ -369,7 +369,7 @@ namespace ADMM{
         // Update boundary terms
         // Only works for bisplit now!!
         void boundary_update(double boundary_current = 0., bool right_end = 1){
-            int node_ID = right_end * this->statistic.num_node;
+            int node_ID = right_end * (this->statistic.num_node - 1);
             this->solver.constraint.boundary(node_ID) = this->solver.constraint.boundary_0(node_ID);
             this->solver.constraint.boundary(node_ID) += boundary_current * (2 * right_end - 1);
         }
@@ -613,16 +613,16 @@ namespace ADMM{
             I_guess << -dI, 0., dI;
 
             for(int dI_iter = 0; dI_iter < I_guess.size(); ++ dI_iter){
-//                this->solve_root_many(tol_prime, tol_dual, I_guess(dI_iter), 1);
-//                double obj_temp = 0.;
-//
-//                for(int network_iter = 0; network_iter < this->opf_sub.size(); ++ network_iter){
-//                    obj_temp += this->opf_sub[network_iter].solver.sol.obj_value;
-//                }
-//
-//                obj_guess(dI_iter) = obj_temp;
-//
-//                std::cout << I_guess(dI_iter) << ":\t" << obj_guess(dI_iter) << "\n";
+                this->solve_root_many(tol_prime, tol_dual, I_guess(dI_iter), 1);
+                double obj_temp = 0.;
+
+                for(int network_iter = 0; network_iter < this->opf_sub.size(); ++ network_iter){
+                    obj_temp += this->opf_sub[network_iter].solver.sol.obj_value;
+                }
+
+                obj_guess(dI_iter) = obj_temp;
+
+                std::cout << I_guess(dI_iter) << ":\t" << obj_guess(dI_iter) << "\n";
             }
         }
     };
