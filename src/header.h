@@ -364,14 +364,6 @@ namespace ADMM{
             }
         }
 
-        // Update boundary terms
-        // Only works for bisplit now!!
-        void boundary_update(double boundary_current = 0., bool right_end = 1){
-            int node_ID = right_end * (this->statistic.num_node - 1);
-            this->solver.constraint.boundary(node_ID) = this->solver.constraint.boundary_0(node_ID);
-            this->solver.constraint.boundary(node_ID) += boundary_current * (2 * right_end - 1);
-        }
-
         // Price gap set (rho must be fixed!!)
         void price_gap_set(double rho){
             for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
