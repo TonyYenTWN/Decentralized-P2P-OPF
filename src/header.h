@@ -5,14 +5,10 @@
 // STL
 #include <complex>
 #include <iostream>
-#include <map>
-#include <tuple>
-#include <utility>
 #include <vector>
 
 // Additional libraries
 #include <Eigen/Dense>
-#include <Eigen/Sparse>
 
 // Structures
 namespace ADMM{
@@ -20,6 +16,75 @@ namespace ADMM{
         double value = 3.14159265358979323846;
         return value;
     }
+
+    struct SparseMatrix{
+        std::vector <std::vector <std::pair <int, double>>> row;
+        std::vector <std::vector <std::pair <int, double>>> col;
+
+        void dim_set(int num_row, int num_col){
+            this->row = std::vector <std::vector <std::pair <int, double>>> (num_row);
+            this->col = std::vector <std::vector <std::pair <int, double>>> (num_col);
+        }
+
+        void rescale(Eigen::VectorXd scale){
+             for(int row_iter = 0; row_iter < this->row.size(); ++ row_iter){
+                for(int entry_iter = 0; entry_iter < this->row[row_iter].size(); ++ entry_iter){
+                    int col_ID = this->row[row_iter][entry_iter].first;
+                    this->row[row_iter][entry_iter].second *= scale(col_ID);
+                }
+             }
+
+             for(int col_iter = 0; col_iter < this->col.size(); ++ col_iter){
+                for(int entry_iter = 0; entry_iter < this->col[col_iter].size(); ++ entry_iter){
+                    this->col[col_iter][entry_iter].second *= scale(col_iter);
+                }
+             }
+        }
+
+        SparseMatrix col_cross_prod(){
+            SparseMatrix Mat;
+            Mat.dim_set(this->col.size(), this->col.size());
+
+            for(int row_iter = 0; row_iter < Mat.row.size(); ++ row_iter){
+                for(int col_iter = 0; col_iter < Mat.col.size(); ++ col_iter){
+                    int counter_0 = 0;
+                    int counter_1 = 0;
+                    double coeff = 0.;
+
+                    bool loop_flag = counter_0 < this->col[row_iter].size();
+                    loop_flag *= counter_1 < this->col[col_iter].size();
+                    while(loop_flag){
+                        // Add the multiplcation if entry is the same
+                        if(this->col[row_iter][counter_0].first == this->col[col_iter][counter_1].first){
+                            coeff += this->col[row_iter][counter_0].second * this->col[col_iter][counter_1].second;
+                            counter_0 += 1;
+                            counter_1 += 1;
+                        }
+                        else{
+                            // Increase the smaller entry
+                            if(this->col[row_iter][counter_0].first < this->col[col_iter][counter_1].first){
+                                counter_0 += 1;
+                            }
+                            else{
+                                counter_1 += 1;
+                            }
+                        }
+
+                        // Update flag criteria
+                        loop_flag = counter_0 < this->col[row_iter].size();
+                        loop_flag *= counter_1 < this->col[col_iter].size();
+                    }
+
+                    if(coeff != 0.){
+                        Mat.row[row_iter].push_back(std::pair <int, double> (col_iter, coeff));
+                        Mat.col[col_iter].push_back(std::pair <int, double> (row_iter, coeff));
+                    }
+                }
+            }
+
+            return Mat;
+        }
+    };
 
     struct opf_struct{
         // System statistic
@@ -33,15 +98,9 @@ namespace ADMM{
 
         // Network information
         struct network_struct{
-            // Subset information (for lower level networks)
-            struct network_map_struct{
-                int current_level;
-                std::map <int, int> connection_nodes; // argument: current level node ID; mapped value: upper level connected node ID (-1 if none)
-            };
-            network_map_struct network_map;
-
             // Network topology information
-            std::vector <Eigen::Vector2i> topology;
+            std::vector <Eigen::Vector2i> topology_line;
+            std::vector <std::vector <Eigen::Vector2i>> topology_node;
 
             // Line conductance information
             Eigen::VectorXcd line_conductance;
@@ -68,7 +127,7 @@ namespace ADMM{
                 };
                 moc_struct moc;
 
-                // Function to merit order curve
+                // Function to set merit order curve
                 void moc_set(){
                     int num_row = 2 * (this->demand.price.size() + this->supply.price.size() - 3);
                     this->moc.price = Eigen::VectorXd(num_row);
@@ -148,34 +207,36 @@ namespace ADMM{
             // f(x): cost function associated with V, S, and I (f(V) and f(I) are well functions)
 
             struct constraint_struct{
-                // Main matrix
-                Eigen::SparseMatrix <double> Matrix_main;
-                Eigen::SparseMatrix <double> PSD_main;
-                std::vector <std::vector <std::pair <int, double>>> Mat_main_terms;
-                std::vector <std::vector <std::pair <int, double>>> PSD_main_terms;
-                Eigen::VectorXd sensitivity_var;
-                Eigen::VectorXd boundary_0;
+                SparseMatrix Mat_main;
+                SparseMatrix PSD_main;
                 Eigen::VectorXd boundary;
             };
             constraint_struct constraint;
 
-            // Solution
-            struct sol_struct{
-                struct value_struct{
-                    struct variable_struct{
-                        Eigen::VectorXd now;
-                        Eigen::VectorXd prev;
+            struct local_struct{
+                struct ID_struct{
+                    std::vector <int> variable;
+                    std::vector <int> constraint;
+                };
+                ID_struct ID;
+
+                struct information_struct{
+                    struct relation_struct{
+                        double self;
+                        std::vector <std::pair <int, double>> neighbor;
+                        std::vector <std::pair <int, double>> outside;
                     };
-                    variable_struct variables;
-                    Eigen::VectorXd price_margin;
-                    Eigen::VectorXd error;
+                    relation_struct prime;
+                    relation_struct dual;
                 };
 
-                value_struct prime;
-                value_struct dual;
-                double obj_value;
+                struct informations_struct{
+                    std::vector <information_struct> variables;
+                    std::vector <information_struct> constraints;
+                };
+                informations_struct infos;
             };
-            sol_struct sol;
+            std::vector <local_struct> locals;
         };
         solver_struct solver;
 
@@ -183,6 +244,39 @@ namespace ADMM{
         void problem_size_parmeters_set(int factor = 1){
             this->statistic.num_variable = factor * (2 * this->statistic.num_node + this->statistic.num_line);
             this->statistic.num_constraint = factor * (this->statistic.num_node + this->statistic.num_line);
+        }
+
+        // Initialize merit order curves and set values for voltage and current
+        void moc_initialize(double theta_limit, double current_limit){
+            this->obj.cost_funcs = std::vector <obj_struct::cost_func_struct> (this->statistic.num_variable);
+
+            // Phase angle boundaries
+            for(int node_iter = 0; node_iter < this->statistic.num_node; ++ node_iter){
+                int var_ID = node_iter;
+                opf_struct::obj_struct::cost_func_struct cost_func;
+                cost_func.moc.price = Eigen::VectorXd(4);
+                cost_func.moc.quantity = Eigen::VectorXd(4);
+                cost_func.moc.obj = Eigen::VectorXd::Zero(4);
+
+                cost_func.moc.price << -std::numeric_limits<double>::infinity(), 0., 0., std::numeric_limits<double>::infinity();
+                cost_func.moc.quantity << -theta_limit, -theta_limit, theta_limit, theta_limit;
+
+                this->obj.cost_funcs[var_ID] = cost_func;
+            }
+
+            // Line current boundaries
+            for(int line_iter = 0; line_iter < this->statistic.num_line; ++ line_iter){
+                int var_ID = 2 * this->statistic.num_node + line_iter;
+                opf_struct::obj_struct::cost_func_struct cost_func;
+                cost_func.moc.price = Eigen::VectorXd(4);
+                cost_func.moc.quantity = Eigen::VectorXd(4);
+                cost_func.moc.obj = Eigen::VectorXd::Zero(4);
+
+                cost_func.moc.price << -std::numeric_limits<double>::infinity(), 0., 0., std::numeric_limits<double>::infinity();
+                cost_func.moc.quantity << -current_limit, -current_limit, current_limit, current_limit;
+
+                this->obj.cost_funcs[var_ID] = cost_func;
+            }
         }
 
         // Linear transformation of the variables and objective coefficients
@@ -212,375 +306,225 @@ namespace ADMM{
             }
         }
 
-        // Initialize merit order curves and set values for voltage and current
-        void moc_initialize(double theta_limit, double current_limit, double penalty_price_voltage){
-            this->obj.cost_funcs = std::vector <obj_struct::cost_func_struct> (this->statistic.num_variable);
-            this->obj.price_range << -500., 3000.;
-            double price_gap = 1.05 * (this->obj.price_range(1) - this->obj.price_range(0));
-            double quantity_inflex = 1000.;
-
-            // Line current boundaries
-            for(int line_iter = 0; line_iter < this->statistic.num_line; ++ line_iter){
-                int var_ID = 2 * this->statistic.num_node + line_iter;
-
-                // Set bid functions for suuply
-                this->obj.cost_funcs[var_ID].supply.price = Eigen::VectorXd(4);
-                this->obj.cost_funcs[var_ID].supply.quantity = Eigen::VectorXd::Zero(4);
-                this->obj.cost_funcs[var_ID].supply.price << -std::numeric_limits<double>::infinity(), 0., price_gap, std::numeric_limits<double>::infinity();
-                this->obj.cost_funcs[var_ID].supply.quantity << 0., current_limit, quantity_inflex, 0.;
-
-                // Set bid functions for demand
-                this->obj.cost_funcs[var_ID].demand.price = Eigen::VectorXd(4);
-                this->obj.cost_funcs[var_ID].demand.quantity = Eigen::VectorXd(4);
-                this->obj.cost_funcs[var_ID].demand.price << -std::numeric_limits<double>::infinity(), -price_gap, 0., std::numeric_limits<double>::infinity();
-                this->obj.cost_funcs[var_ID].demand.quantity << 0., quantity_inflex, current_limit, 0.;
-
-                // Set merit order curve for residual load
-                this->obj.cost_funcs[var_ID].moc_set();
-            }
-
-            if(penalty_price_voltage == std::numeric_limits<double>::infinity()){
-                // Phase angle boundaries
-                for(int node_iter = 0; node_iter < this->statistic.num_node; ++ node_iter){
-                    int var_ID = node_iter;
-                    opf_struct::obj_struct::cost_func_struct cost_func;
-                    cost_func.moc.price = Eigen::VectorXd(4);
-                    cost_func.moc.quantity = Eigen::VectorXd(4);
-                    cost_func.moc.obj = Eigen::VectorXd::Zero(4);
-
-                    cost_func.moc.price << -std::numeric_limits<double>::infinity(), 0., 0., std::numeric_limits<double>::infinity();
-                    cost_func.moc.quantity << -theta_limit, -theta_limit, theta_limit, theta_limit;
-
-                    this->obj.cost_funcs[var_ID] = cost_func;
-                }
-
-                return;
-            }
-
-            // Phase angle boundaries
-            for(int node_iter = 0; node_iter < this->statistic.num_node; ++ node_iter){
-                int var_ID = node_iter;
-
-                // Set bid functions for suuply
-                this->obj.cost_funcs[var_ID].supply.price = Eigen::VectorXd(4);
-                this->obj.cost_funcs[var_ID].supply.quantity = Eigen::VectorXd::Zero(4);
-                this->obj.cost_funcs[var_ID].supply.price << -std::numeric_limits<double>::infinity(), 0., penalty_price_voltage, std::numeric_limits<double>::infinity();
-                this->obj.cost_funcs[var_ID].supply.quantity << 0., theta_limit, quantity_inflex, 0.;
-
-                // Set bid functions for demand
-                this->obj.cost_funcs[var_ID].demand.price = Eigen::VectorXd(4);
-                this->obj.cost_funcs[var_ID].demand.quantity = Eigen::VectorXd(4);
-                this->obj.cost_funcs[var_ID].demand.price << -std::numeric_limits<double>::infinity(), -penalty_price_voltage, 0., std::numeric_limits<double>::infinity();
-                this->obj.cost_funcs[var_ID].demand.quantity << 0., quantity_inflex, theta_limit, 0.;
-
-                // Set merit order curve for residual load
-                this->obj.cost_funcs[var_ID].moc_set();
-            }
-        }
-
-        // Main matrix initialization for DC OPF
+        // Main and PSD matrix initialization for DC OPF
         void DC_Matrix_main_set(){
-            // Variables: V, S, I
-            // Constraints: Node balance, line current
-            this->solver.constraint.Mat_main_terms = std::vector <std::vector <std::pair <int, double>>> (this->statistic.num_variable);
-            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
-                this->solver.constraint.Mat_main_terms[var_iter].reserve(this->statistic.num_constraint);
-            }
-            this->solver.constraint.PSD_main_terms = std::vector <std::vector <std::pair <int, double>>> (this->statistic.num_variable);
-            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
-                this->solver.constraint.PSD_main_terms[var_iter].reserve(this->statistic.num_variable);
-            }
-            this->solver.constraint.sensitivity_var = Eigen::VectorXd (this->statistic.num_variable);
-
-            // Set the main matrix
-            Eigen::MatrixXd Mat = Eigen::MatrixXd::Zero(this->statistic.num_constraint, this->statistic.num_variable);
+            // Initialize main matrix dimensions
+            this->solver.constraint.Mat_main.dim_set(this->statistic.num_constraint, this->statistic.num_variable);
 
             // Node Balance Equation
             // S - t(NL) %*% I = 0
             for(int node_iter = 0; node_iter < this->statistic.num_node; ++ node_iter){
-                int var_ID = this->statistic.num_node + node_iter;
-                Mat(node_iter, var_ID) = 1.;
-            }
-            for(int line_iter = 0; line_iter < this->statistic.num_line; ++ line_iter){
-                int var_ID = 2 * this->statistic.num_node + line_iter;
-                Mat(this->network.topology[line_iter](0), var_ID) = -1.;
-                Mat(this->network.topology[line_iter](1), var_ID) = 1.;
+                int row_ID = node_iter;
+
+                {
+                    int col_ID = this->statistic.num_node + node_iter;
+                    double coeff = 1.;
+
+                    this->solver.constraint.Mat_main.row[row_ID].push_back(std::pair <int, double> (col_ID, coeff));
+                    this->solver.constraint.Mat_main.col[col_ID].push_back(std::pair <int, double> (row_ID, coeff));
+                }
+
+                for(int link_iter = 0; link_iter < this->network.topology_node[node_iter].size(); ++ link_iter){
+                    int col_ID = 2 * this->statistic.num_node + this->network.topology_node[node_iter][link_iter](0);
+                    double coeff = (double) -this->network.topology_node[node_iter][link_iter](1);
+
+                    this->solver.constraint.Mat_main.row[row_ID].push_back(std::pair <int, double> (col_ID, coeff));
+                    this->solver.constraint.Mat_main.col[col_ID].push_back(std::pair <int, double> (row_ID, coeff));
+                }
             }
 
             // Line Current Equation
             // Y_l %*% NL %*% V - I = 0
             for(int line_iter = 0; line_iter < this->statistic.num_line; ++ line_iter){
-                int var_ID = 2 * this->statistic.num_node + line_iter;
-                int constr_ID = this->statistic.num_node + line_iter;
+                int row_ID = this->statistic.num_node + line_iter;
                 double y_l = this->network.line_conductance(line_iter).imag();
 
-                Mat(constr_ID, this->network.topology[line_iter](0)) = y_l;
-                Mat(constr_ID, this->network.topology[line_iter](1)) = -y_l;
-                Mat(constr_ID, var_ID) = -1.;
-            }
+                for(int end_iter = 0; end_iter < 2; ++ end_iter){
+                    int col_ID = this->network.topology_line[line_iter](end_iter);
+                    double coeff = y_l;
+                    coeff *= 1 - 2 * end_iter;
 
-            // Set boundary for equality constraints; transformation considered
-            // Ax = c
-            // A(mx' + x_0) = c
-            // [A][m]x' = c - A * x_0
-            this->solver.constraint.boundary_0 = -Mat * this->obj.transformation.shift;
-            this->solver.constraint.boundary = this->solver.constraint.boundary_0;
+                    this->solver.constraint.Mat_main.row[row_ID].push_back(std::pair <int, double> (col_ID, coeff));
+                    this->solver.constraint.Mat_main.col[col_ID].push_back(std::pair <int, double> (row_ID, coeff));
+                }
 
-            // Apply transformation to the matrix
-            Eigen::MatrixXd Diag = Eigen::MatrixXd::Zero(this->statistic.num_variable, this->statistic.num_variable);
-            Eigen::MatrixXd Diag_inv = Eigen::MatrixXd::Zero(this->statistic.num_variable, this->statistic.num_variable);
-            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
-                Diag(var_iter, var_iter) = this->obj.transformation.scale(var_iter);
-                Diag_inv(var_iter, var_iter) = 1. / Diag(var_iter, var_iter);
-            }
-            Mat = Mat * Diag;
-            Eigen::MatrixXd PSD = Mat.transpose() * Mat;
+                {
+                    int col_ID = 2 * this->statistic.num_node + line_iter;
+                    double coeff = -1.;
 
-            // Turn dense to sparse matrix
-            this->solver.constraint.Matrix_main = Mat.sparseView();
-            this->solver.constraint.PSD_main = PSD.sparseView();
-
-            // Record non-zero terms for Mat
-            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
-                for(int constr_iter = 0; constr_iter < this->statistic.num_constraint; ++ constr_iter){
-                    if(Mat(constr_iter, var_iter) != 0.){
-                        this->solver.constraint.Mat_main_terms[var_iter].push_back(std::pair <int, double> (constr_iter, Mat(constr_iter, var_iter)));
-                    }
+                    this->solver.constraint.Mat_main.row[row_ID].push_back(std::pair <int, double> (col_ID, coeff));
+                    this->solver.constraint.Mat_main.col[col_ID].push_back(std::pair <int, double> (row_ID, coeff));
                 }
             }
 
-            // Record non-zero terms for PSD
-            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
-                for(int row_iter = 0; row_iter < this->statistic.num_variable; ++ row_iter){
-                    if(PSD(row_iter, var_iter) != 0.){
-                        if(row_iter == var_iter){
-                            this->solver.constraint.sensitivity_var(var_iter) = PSD(row_iter, var_iter);
+            // Rescale Main Matrix
+            this->solver.constraint.Mat_main.rescale(this->obj.transformation.scale);
+
+            // Create PSD matrix
+            this->solver.constraint.PSD_main = this->solver.constraint.Mat_main.col_cross_prod();
+        }
+
+        // Local information initialization
+        void local_information_set(){
+            this->solver.locals = std::vector <solver_struct::local_struct> (this->statistic.num_node);
+
+            for(int node_iter = 0; node_iter < this->statistic.num_node; ++ node_iter){
+                int num_line_temp = this->network.topology_node[node_iter].size();
+                int num_var_temp = 2 + num_line_temp;
+                int num_constr_temp = 1 + num_line_temp;
+
+                // Store the IDs
+                int V_ID = node_iter;
+                int S_ID = this->statistic.num_node + node_iter;
+                this->solver.locals[node_iter].ID.variable.reserve(num_var_temp);
+                this->solver.locals[node_iter].ID.constraint.reserve(num_constr_temp);
+                this->solver.locals[node_iter].ID.variable.push_back(V_ID);
+                this->solver.locals[node_iter].ID.constraint.push_back(V_ID);
+                this->solver.locals[node_iter].ID.variable.push_back(S_ID);
+                for(int link_iter = 0; link_iter < this->network.topology_node[node_iter].size(); ++ link_iter){
+                    if(this->network.topology_node[node_iter][link_iter](1) != 1){
+                        continue;
+                    }
+
+                    int I_ID = 2 * this->statistic.num_node + this->network.topology_node[node_iter][link_iter](0);
+                    int constr_ID = this->statistic.num_node + this->network.topology_node[node_iter][link_iter](0);
+                    this->solver.locals[node_iter].ID.variable.push_back(I_ID);
+                    this->solver.locals[node_iter].ID.constraint.push_back(constr_ID);
+                }
+
+                // Store the information
+                num_var_temp = this->solver.locals[node_iter].ID.variable.size();
+                num_constr_temp = this->solver.locals[node_iter].ID.constraint.size();
+
+                // Prime variables
+                this->solver.locals[node_iter].infos.variables.reserve(num_var_temp);
+                for(int var_iter = 0; var_iter < num_var_temp; ++ var_iter){
+                    int var_ID = this->solver.locals[node_iter].ID.variable[var_iter];
+
+                    // Check non-zero entries in PSD (for prime variables minimization)
+                    this->solver.locals[node_iter].infos.variables[var_iter].prime.neighbor.reserve(num_var_temp);
+                    this->solver.locals[node_iter].infos.variables[var_iter].prime.outside.reserve(this->statistic.num_variable);
+                    int counter_var = 0;
+                    int var_ID_temp = this->solver.locals[node_iter].ID.variable[counter_var];
+                    for(int col_iter = 0; col_iter < this->solver.constraint.PSD_main.row[var_ID].size(); ++ col_iter){
+                        auto pair_temp = this->solver.constraint.PSD_main.row[var_ID][col_iter];
+                        int col_ID = pair_temp.first;
+                        double coeff = pair_temp.second;
+
+                        if(col_ID == var_ID_temp){
+                            if(col_ID == var_ID){
+                                this->solver.locals[node_iter].infos.variables[var_iter].prime.self = coeff;
+                            }
+                            else{
+                                this->solver.locals[node_iter].infos.variables[var_iter].prime.neighbor.push_back(pair_temp);
+                            }
+
+                            counter_var += 1;
+                            if(counter_var < this->solver.locals[node_iter].ID.variable.size()){
+                                var_ID_temp = this->solver.locals[node_iter].ID.variable[counter_var];
+                            }
                         }
                         else{
-                            this->solver.constraint.PSD_main_terms[var_iter].push_back(std::pair <int, double> (row_iter, PSD(row_iter, var_iter)));
+                            this->solver.locals[node_iter].infos.variables[var_iter].prime.outside.push_back(pair_temp);
+                        }
+                    }
+
+                    // Check non-zero entries in transpose of main (for prime variables minimization)
+                    this->solver.locals[node_iter].infos.variables[var_iter].dual.neighbor.reserve(num_constr_temp);
+                    this->solver.locals[node_iter].infos.variables[var_iter].dual.outside.reserve(this->statistic.num_constraint);
+                    int counter_constr = 0;
+                    int constr_ID_temp = this->solver.locals[node_iter].ID.constraint[counter_constr];
+                    for(int row_iter = 0; row_iter < this->solver.constraint.Mat_main.col[var_ID].size(); ++ row_iter){
+                        auto pair_temp = this->solver.constraint.Mat_main.col[var_ID][row_iter];
+                        int row_ID = pair_temp.first;
+                        double coeff = pair_temp.second;
+
+                        if(row_ID == constr_ID_temp){
+                            this->solver.locals[node_iter].infos.variables[var_iter].dual.neighbor.push_back(pair_temp);
+
+                            counter_constr += 1;
+                            if(counter_constr < this->solver.locals[node_iter].ID.constraint.size()){
+                                constr_ID_temp = this->solver.locals[node_iter].ID.constraint[counter_constr];
+                            }
+                        }
+                        else{
+                            this->solver.locals[node_iter].infos.variables[var_iter].dual.outside.push_back(pair_temp);
+                        }
+                    }
+
+                }
+
+                // Dual variables
+                this->solver.locals[node_iter].infos.constraints.reserve(num_constr_temp);
+                for(int constr_iter = 0; constr_iter < num_constr_temp; ++ constr_iter){
+                    int constr_ID = this->solver.locals[node_iter].ID.constraint[constr_iter];
+
+                    // Check non-zero entries in main (for dual variables maximization)
+                    this->solver.locals[node_iter].infos.constraints[constr_iter].prime.neighbor.reserve(num_var_temp);
+                    this->solver.locals[node_iter].infos.constraints[constr_iter].prime.outside.reserve(this->statistic.num_variable);
+                    int counter = 0;
+                    int var_ID_temp = this->solver.locals[node_iter].ID.variable[counter];
+                    for(int col_iter = 0; col_iter < this->solver.constraint.Mat_main.row[constr_ID].size(); ++ col_iter){
+                        auto pair_temp = this->solver.constraint.Mat_main.row[constr_ID][col_iter];
+                        int col_ID = pair_temp.first;
+                        double coeff = pair_temp.second;
+
+                        if(col_ID == var_ID_temp){
+                            this->solver.locals[node_iter].infos.constraints[constr_iter].prime.neighbor.push_back(pair_temp);
+
+                            counter += 1;
+                            if(counter < this->solver.locals[node_iter].ID.variable.size()){
+                                var_ID_temp = this->solver.locals[node_iter].ID.variable[counter];
+                            }
+                        }
+                        else{
+                            this->solver.locals[node_iter].infos.constraints[constr_iter].prime.outside.push_back(pair_temp);
                         }
                     }
                 }
             }
         }
 
-        // Update boundary terms
-        // Only works for bisplit now!!
-        void boundary_update(double boundary_current = 0., bool right_end = 1){
-            int node_ID = right_end * (this->statistic.num_node - 1);
-            this->solver.constraint.boundary(node_ID) = this->solver.constraint.boundary_0(node_ID);
-            this->solver.constraint.boundary(node_ID) += boundary_current * (2 * right_end - 1);
-        }
+        void print_node_infos(){
+            std::cout << "Print infos of each node.\n\n";
 
-        // Price gap set (rho must be fixed!!)
-        void price_gap_set(double rho){
-            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
-                this->obj.cost_funcs[var_iter].moc.gap = this->obj.cost_funcs[var_iter].moc.price / rho;
-                this->obj.cost_funcs[var_iter].moc.gap += this->solver.constraint.sensitivity_var(var_iter) * this->obj.cost_funcs[var_iter].moc.quantity;
-            }
-        }
+            for(int node_iter = 0; node_iter < this->statistic.num_node; ++ node_iter){
+                std::cout << "=======================================================\n";
+                std::cout << "Node " << node_iter << "\n";
+                std::cout << "=======================================================\n";
 
-        // Solver function: direct search the root
-        void solve_iteration_subproblem(double rho, Eigen::VectorXd &x, Eigen::VectorXd &u){
-            // Update primary variables and price margin
-            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
-                double inner_prod = 0.;
-                // add from PSD
-                int entry_iter = 0;
-                while(entry_iter < this->solver.constraint.PSD_main_terms[var_iter].size()){
-                    int row_ID = this->solver.constraint.PSD_main_terms[var_iter][entry_iter].first;
-                    double coeff = this->solver.constraint.PSD_main_terms[var_iter][entry_iter].second;
-                    double value = coeff * x(row_ID);
-                    inner_prod += value;
-                    entry_iter += 1;
+                int num_var_temp = this->solver.locals[node_iter].ID.variable.size();
+                int num_constr_temp = this->solver.locals[node_iter].ID.constraint.size();
+
+                std::cout << "Variables:\n";
+                std::cout << "ID:\t";
+                for(int var_iter = 0; var_iter < num_var_temp; ++ var_iter){
+                    std::cout << this->solver.locals[node_iter].ID.variable[var_iter] << "\t";
+                }
+                std::cout << "\n\n";
+
+                for(int var_iter = 0; var_iter < num_var_temp; ++ var_iter){
+                    std::cout << "------------------------------------------\n";
+                    std::cout << "Var " << this->solver.locals[node_iter].ID.variable[var_iter] << "\n";
+                    std::cout << "------------------------------------------\n";
+                    std::cout << "Prime:\n";
+                    std::cout << "Self:\t" << this->solver.locals[node_iter].infos.variables[var_iter].prime.self << "\n";
+
+                    std::cout << "\n";
                 }
 
-                // add from Mat
-                entry_iter = 0;
-                while(entry_iter < this->solver.constraint.Mat_main_terms[var_iter].size()){
-                    int constr_ID = this->solver.constraint.Mat_main_terms[var_iter][entry_iter].first;
-                    double coeff = this->solver.constraint.Mat_main_terms[var_iter][entry_iter].second;
-                    double value = coeff * (u(constr_ID) - this->solver.constraint.boundary(constr_ID));
-                    inner_prod += value;
-                    entry_iter += 1;
+                std::cout << "Constraints:\n";
+                std::cout << "ID:\t";
+                for(int constr_iter = 0; constr_iter < num_constr_temp; ++ constr_iter){
+                    std::cout << this->solver.locals[node_iter].ID.constraint[constr_iter] << "\t";
                 }
-
-                // Bisection method for finding KKT point
-                Eigen::Vector2i gap_price_ID(0, this->obj.cost_funcs[var_iter].moc.price.size() - 1);
-                int mid_price_ID = gap_price_ID.sum() / 2;
-                while(gap_price_ID(1) - gap_price_ID(0) > 1){
-                    Eigen::Vector2d gap_rent;
-                    gap_rent(0) = this->obj.cost_funcs[var_iter].moc.gap(gap_price_ID(0)) + inner_prod;
-                    gap_rent(1) = this->obj.cost_funcs[var_iter].moc.gap(gap_price_ID(1)) + inner_prod;
-
-                    double mid_rent;
-                    mid_rent = this->obj.cost_funcs[var_iter].moc.gap(mid_price_ID) + inner_prod;
-
-                    // Bisection root-search method
-                    if(mid_rent * gap_rent(0) <= 0){
-                        gap_price_ID(1) = mid_price_ID;
-                    }
-                    else{
-                        gap_price_ID(0) = mid_price_ID;
-                    }
-
-                    mid_price_ID = gap_price_ID.sum() / 2;
-                }
-
-                // Check binding term
-                if(gap_price_ID(0) % 2 == 1){
-                    // price fixed case
-                    this->solver.sol.prime.price_margin(var_iter) = this->obj.cost_funcs[var_iter].moc.price(mid_price_ID);
-                    x(var_iter) = -this->solver.sol.prime.price_margin(var_iter) / rho;
-                    x(var_iter) -= inner_prod;
-                    x(var_iter) /= this->solver.constraint.sensitivity_var(var_iter);
-                }
-                else{
-                    // quantity fixed case
-                    x(var_iter) = this->obj.cost_funcs[var_iter].moc.quantity(mid_price_ID);
-                    this->solver.sol.prime.price_margin(var_iter) = -rho * (this->solver.constraint.sensitivity_var(var_iter) * this->obj.cost_funcs[var_iter].moc.quantity(mid_price_ID) + inner_prod);
-                }
-            }
-        }
-
-        void solve_root(double tol_prime, double tol_dual, bool print_flag = 1){
-            // Initialization
-            double rho = 1.;
-            double omega = 1.;
-            double alpha = 1.;
-            this->solver.sol.prime.variables.prev = Eigen::VectorXd::Zero(this->statistic.num_variable);
-            this->solver.sol.prime.variables.now = Eigen::VectorXd::Zero(this->statistic.num_variable);
-            this->solver.sol.prime.price_margin = Eigen::VectorXd::Zero(this->statistic.num_variable);
-            this->solver.sol.dual.variables.prev = Eigen::VectorXd::Zero(this->statistic.num_constraint);
-            this->solver.sol.dual.variables.now = Eigen::VectorXd::Zero(this->statistic.num_constraint);
-            price_gap_set(rho);
-
-            // Main loop
-            // f(x) + .5 * rho * ||A %*% x - c + u||^2
-            // f(x) + .5 * rho * (M_{ij} x_i x_j + 2 * A_{ij} b_i x_j + ...)
-            // KKT: p_i + rho * (M_{ij} x_j + t(A)_{ij} b_j) = 0
-            int loop = 0;
-            while(true){
-                // Update prime variables and associate prices
-                int sub_loop = 0;
-                while(true){
-                    solve_iteration_subproblem(rho, this->solver.sol.prime.variables.now, this->solver.sol.dual.variables.now);
-
-                    // Stabilization weight for x update
-                    this->solver.sol.prime.variables.now = omega * this->solver.sol.prime.variables.now + (1. - omega) * this->solver.sol.prime.variables.prev;
-                    this->solver.sol.prime.variables.prev = this->solver.sol.prime.variables.now;
-
-                    // Check convergence for subproblem
-                    double tol_sub = exp(-loop);
-                    tol_sub = std::max(tol_sub, 1E-6 * tol_dual);
-
-                    this->solver.sol.dual.error = this->solver.constraint.Matrix_main * this->solver.sol.prime.variables.now - this->solver.constraint.boundary + this->solver.sol.dual.variables.now;
-                    this->solver.sol.dual.error = rho * this->solver.constraint.Matrix_main.transpose() * this->solver.sol.dual.error;
-                    this->solver.sol.dual.error += this->solver.sol.prime.price_margin;
-                    if((this->solver.sol.dual.error.array() * this->solver.sol.dual.error.array()).maxCoeff() < tol_sub){
-                        break;
-                    }
-
-                    sub_loop += 1;
-                }
-
-                // Update dual variables
-                // u <- u + alpha * (A %*% x - c)
-                this->solver.sol.dual.variables.now += alpha * (this->solver.constraint.Matrix_main * this->solver.sol.prime.variables.now - this->solver.constraint.boundary);
-
-                // Check convergence for whole problem
-                this->solver.sol.prime.error = this->solver.constraint.Matrix_main * this->solver.sol.prime.variables.now - this->solver.constraint.boundary;
-                this->solver.sol.dual.error = this->solver.sol.prime.price_margin;
-                this->solver.sol.dual.error += rho * this->solver.constraint.Matrix_main.transpose() * this->solver.sol.dual.variables.now;
-                double prime_error_norm = this->solver.sol.prime.error.norm();
-                prime_error_norm /= this->solver.sol.prime.error.size();
-                double dual_error_norm = this->solver.sol.dual.error.norm();
-                dual_error_norm /= this->solver.sol.dual.error.size();
-                if(prime_error_norm < tol_prime && dual_error_norm < tol_dual){
-                    break;
-                }
-
-                // Print progress
-                if(print_flag){
-                    int sys_show = (int) 7. - log(this->statistic.num_variable) / log(10.);
-                    sys_show = std::max(sys_show, 0);
-                    if(loop % (int) pow(10., sys_show) == 0){
-                        std::cout << "Loop:\t" << loop << "\n";
-                        std::cout << "Prime Error:\t" << prime_error_norm << "\n";
-                        std::cout << "Dual Error:\t" << dual_error_norm << "\n";
-                        std::cout << "\n\n";
-                    }
-                }
-                loop += 1;
-            }
-
-            // Calculate objective value
-            this->solver.sol.obj_value = 0.;
-            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
-                // Bisection method for finding location of solution
-                Eigen::Vector2i gap_price_ID(0, this->obj.cost_funcs[var_iter].moc.price.size() - 1);
-                int mid_price_ID = gap_price_ID.sum() / 2;
-                Eigen::Vector2d gap_rent;
-                while(gap_price_ID(1) - gap_price_ID(0) > 1){
-                    gap_rent(0) = this->obj.cost_funcs[var_iter].moc.quantity(gap_price_ID(0)) - this->solver.sol.prime.variables.now(var_iter);
-                    gap_rent(1) = this->obj.cost_funcs[var_iter].moc.quantity(gap_price_ID(1)) - this->solver.sol.prime.variables.now(var_iter);
-
-                    double mid_rent;
-                    mid_rent = this->obj.cost_funcs[var_iter].moc.quantity(mid_price_ID) - this->solver.sol.prime.variables.now(var_iter);
-
-                    // Bisection root-search method
-                    if(mid_rent * gap_rent(0) <= 0){
-                        gap_price_ID(1) = mid_price_ID;
-                    }
-                    else{
-                        gap_price_ID(0) = mid_price_ID;
-                    }
-
-                    mid_price_ID = gap_price_ID.sum() / 2;
-                }
-
-                double obj_temp = 0.;
-                obj_temp += this->obj.cost_funcs[var_iter].moc.obj(gap_price_ID(0)) * gap_rent(1);
-                obj_temp -= this->obj.cost_funcs[var_iter].moc.obj(gap_price_ID(1)) * gap_rent(0);
-                obj_temp /= gap_rent(1) - gap_rent(0);
-
-                this->solver.sol.obj_value += obj_temp;
-            }
-
-            if(print_flag){
-                std::cout << "Total loop:\t" << loop << "\n";
-                std::cout << "Prime Error:\t" << this->solver.sol.prime.error.norm() / this->solver.sol.prime.error.size() << "\n";
-                std::cout << "Dual Error:\t" << this->solver.sol.dual.error.norm() / this->solver.sol.dual.error.size() << "\n";
-                std::cout << "Objective value:\t" << this->solver.sol.obj_value << "\n";
-                std::cout << "Solution:\n";
-                std::cout << (this->obj.transformation.scale.array() * this->solver.sol.prime.variables.now.array() + this->obj.transformation.shift.array()).segment(this->statistic.num_node, this->statistic.num_node).transpose() << "\n";
                 std::cout << "\n";
-           }
-        }
 
-        // Might be used later in parallel
-        double eigen_value(Eigen::SparseMatrix <double> Mat){
-            double eigen_value;
-            Eigen::VectorXd eigen_vec_prev = Eigen::VectorXd::Ones(Mat.rows());
-            Eigen::VectorXd eigen_vec = eigen_vec_prev;
-            while(true){
-                eigen_vec = Mat * eigen_vec;
-                eigen_value = (eigen_vec.array() * (Mat * eigen_vec).array()).sum();
-                eigen_value /= (eigen_vec.array() * eigen_vec.array()).sum();
-                eigen_vec /= eigen_value;
-
-                if((eigen_vec - eigen_vec_prev).norm() >= 1E-12){
-                    eigen_vec_prev = eigen_vec;
-                }
-                else{
-                    break;
-                }
+                std::cout << "\n\n";
             }
-
-            return(eigen_value);
         }
     };
 
     // Functions
-    void radial_line_problem_set(opf_struct&, int, int, std::complex<double>, double, double, double, double);
+    void radial_line_problem_set(opf_struct&, int, int, std::complex<double>, double, double, double);
 }

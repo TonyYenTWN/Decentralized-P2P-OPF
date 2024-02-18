@@ -5,7 +5,7 @@
 
 int main()
 {
-    int num_node = 6;
+    int num_node = 3;
     int num_price = 10;
     std::complex<double> y_l (0., 1.);
     double theta_limit = ADMM::pi() / 6.;
@@ -13,8 +13,8 @@ int main()
     double total_load = 2.;
 
     ADMM::opf_struct opf;
-    radial_line_problem_set(opf, num_node, num_price, y_l, theta_limit, I_limit, total_load, std::numeric_limits<double>::infinity());
-    opf.solve_root(1E-6, 1E-6, 1);
+    radial_line_problem_set(opf, num_node, num_price, y_l, theta_limit, I_limit, total_load);
+    opf.print_node_infos();
 
     return 0;
 }

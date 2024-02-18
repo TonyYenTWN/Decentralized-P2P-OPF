@@ -2,7 +2,7 @@
 #include "header.h"
 
 namespace ADMM{
-    void radial_line_problem_set(opf_struct &opf, int num_node, int num_price, std::complex<double> y_l, double theta_limit, double current_limit, double total_load, double penalty_price_voltage){
+    void radial_line_problem_set(opf_struct &opf, int num_node, int num_price, std::complex<double> y_l, double theta_limit, double current_limit, double total_load){
         // Set systems statistic
         opf.statistic.num_node = num_node;
         opf.statistic.num_line = num_node - 1;
@@ -12,13 +12,19 @@ namespace ADMM{
         // Set network information
         opf.network.line_conductance = y_l * Eigen::VectorXcd::Ones(num_line);
         opf.network.line_conductance *= num_line;
-        opf.network.topology.reserve(num_line);
+        opf.network.topology_line.reserve(num_line);
+        opf.network.topology_node.reserve(num_node);
+        for(int node_iter = 0; node_iter < num_node; ++ node_iter){
+            opf.network.topology_node[node_iter].reserve(num_line);
+        }
         for(int line_iter = 0; line_iter < num_line; ++ line_iter){
-            opf.network.topology.push_back(Eigen::Vector2i(line_iter, line_iter + 1));
+            opf.network.topology_line.push_back(Eigen::Vector2i(line_iter, line_iter + 1));
+            opf.network.topology_node[line_iter].push_back(Eigen::Vector2i(line_iter, 1));
+            opf.network.topology_node[line_iter + 1].push_back(Eigen::Vector2i(line_iter, -1));
         }
 
         // Set cost functions and merit order curves
-        opf.moc_initialize(theta_limit, current_limit, penalty_price_voltage);
+        opf.moc_initialize(theta_limit, current_limit);
 
         // Power source / sink cost functions
         // First node is source node
@@ -51,8 +57,11 @@ namespace ADMM{
             opf.obj.cost_funcs[var_ID].moc_set();
         }
 
-        // Set solver
+        // Set scale of variables
         opf.transformation_set();
+
+        // Set solver
         opf.DC_Matrix_main_set();
+        opf.local_information_set();
     }
 }
