@@ -18,7 +18,7 @@ namespace ADMM{
         }
 
         // Set cost functions and merit order curves
-        opf.moc_initialize(theta_limit, current_limit, penalty_price_voltage);
+        opf.moc_initialize(theta_limit, current_limit);
 
         // Power source / sink cost functions
         // First node is source node
@@ -51,8 +51,10 @@ namespace ADMM{
             opf.obj.cost_funcs[var_ID].moc_set();
         }
 
-        // Set solver
+        // Set scale of variables
         opf.transformation_set();
+
+        // Set solver
         opf.DC_Matrix_main_set();
     }
 }

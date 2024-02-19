@@ -33,13 +33,6 @@ namespace ADMM{
 
         // Network information
         struct network_struct{
-            // Subset information (for lower level networks)
-            struct network_map_struct{
-                int current_level;
-                std::map <int, int> connection_nodes; // argument: current level node ID; mapped value: upper level connected node ID (-1 if none)
-            };
-            network_map_struct network_map;
-
             // Network topology information
             std::vector <Eigen::Vector2i> topology;
 
@@ -68,7 +61,7 @@ namespace ADMM{
                 };
                 moc_struct moc;
 
-                // Function to merit order curve
+                // Function to set merit order curve
                 void moc_set(){
                     int num_row = 2 * (this->demand.price.size() + this->supply.price.size() - 3);
                     this->moc.price = Eigen::VectorXd(num_row);
@@ -154,7 +147,6 @@ namespace ADMM{
                 std::vector <std::vector <std::pair <int, double>>> Mat_main_terms;
                 std::vector <std::vector <std::pair <int, double>>> PSD_main_terms;
                 Eigen::VectorXd sensitivity_var;
-                Eigen::VectorXd boundary_0;
                 Eigen::VectorXd boundary;
             };
             constraint_struct constraint;
@@ -213,68 +205,35 @@ namespace ADMM{
         }
 
         // Initialize merit order curves and set values for voltage and current
-        void moc_initialize(double theta_limit, double current_limit, double penalty_price_voltage){
+        void moc_initialize(double theta_limit, double current_limit){
             this->obj.cost_funcs = std::vector <obj_struct::cost_func_struct> (this->statistic.num_variable);
-            this->obj.price_range << -500., 3000.;
-            double price_gap = 1.05 * (this->obj.price_range(1) - this->obj.price_range(0));
-            double quantity_inflex = 1000.;
-
-            // Line current boundaries
-            for(int line_iter = 0; line_iter < this->statistic.num_line; ++ line_iter){
-                int var_ID = 2 * this->statistic.num_node + line_iter;
-
-                // Set bid functions for suuply
-                this->obj.cost_funcs[var_ID].supply.price = Eigen::VectorXd(4);
-                this->obj.cost_funcs[var_ID].supply.quantity = Eigen::VectorXd::Zero(4);
-                this->obj.cost_funcs[var_ID].supply.price << -std::numeric_limits<double>::infinity(), 0., price_gap, std::numeric_limits<double>::infinity();
-                this->obj.cost_funcs[var_ID].supply.quantity << 0., current_limit, quantity_inflex, 0.;
-
-                // Set bid functions for demand
-                this->obj.cost_funcs[var_ID].demand.price = Eigen::VectorXd(4);
-                this->obj.cost_funcs[var_ID].demand.quantity = Eigen::VectorXd(4);
-                this->obj.cost_funcs[var_ID].demand.price << -std::numeric_limits<double>::infinity(), -price_gap, 0., std::numeric_limits<double>::infinity();
-                this->obj.cost_funcs[var_ID].demand.quantity << 0., quantity_inflex, current_limit, 0.;
-
-                // Set merit order curve for residual load
-                this->obj.cost_funcs[var_ID].moc_set();
-            }
-
-            if(penalty_price_voltage == std::numeric_limits<double>::infinity()){
-                // Phase angle boundaries
-                for(int node_iter = 0; node_iter < this->statistic.num_node; ++ node_iter){
-                    int var_ID = node_iter;
-                    opf_struct::obj_struct::cost_func_struct cost_func;
-                    cost_func.moc.price = Eigen::VectorXd(4);
-                    cost_func.moc.quantity = Eigen::VectorXd(4);
-                    cost_func.moc.obj = Eigen::VectorXd::Zero(4);
-
-                    cost_func.moc.price << -std::numeric_limits<double>::infinity(), 0., 0., std::numeric_limits<double>::infinity();
-                    cost_func.moc.quantity << -theta_limit, -theta_limit, theta_limit, theta_limit;
-
-                    this->obj.cost_funcs[var_ID] = cost_func;
-                }
-
-                return;
-            }
 
             // Phase angle boundaries
             for(int node_iter = 0; node_iter < this->statistic.num_node; ++ node_iter){
                 int var_ID = node_iter;
+                opf_struct::obj_struct::cost_func_struct cost_func;
+                cost_func.moc.price = Eigen::VectorXd(4);
+                cost_func.moc.quantity = Eigen::VectorXd(4);
+                cost_func.moc.obj = Eigen::VectorXd::Zero(4);
 
-                // Set bid functions for suuply
-                this->obj.cost_funcs[var_ID].supply.price = Eigen::VectorXd(4);
-                this->obj.cost_funcs[var_ID].supply.quantity = Eigen::VectorXd::Zero(4);
-                this->obj.cost_funcs[var_ID].supply.price << -std::numeric_limits<double>::infinity(), 0., penalty_price_voltage, std::numeric_limits<double>::infinity();
-                this->obj.cost_funcs[var_ID].supply.quantity << 0., theta_limit, quantity_inflex, 0.;
+                cost_func.moc.price << -std::numeric_limits<double>::infinity(), 0., 0., std::numeric_limits<double>::infinity();
+                cost_func.moc.quantity << -theta_limit, -theta_limit, theta_limit, theta_limit;
 
-                // Set bid functions for demand
-                this->obj.cost_funcs[var_ID].demand.price = Eigen::VectorXd(4);
-                this->obj.cost_funcs[var_ID].demand.quantity = Eigen::VectorXd(4);
-                this->obj.cost_funcs[var_ID].demand.price << -std::numeric_limits<double>::infinity(), -penalty_price_voltage, 0., std::numeric_limits<double>::infinity();
-                this->obj.cost_funcs[var_ID].demand.quantity << 0., quantity_inflex, theta_limit, 0.;
+                this->obj.cost_funcs[var_ID] = cost_func;
+            }
 
-                // Set merit order curve for residual load
-                this->obj.cost_funcs[var_ID].moc_set();
+            // Line current boundaries
+            for(int line_iter = 0; line_iter < this->statistic.num_line; ++ line_iter){
+                int var_ID = 2 * this->statistic.num_node + line_iter;
+                opf_struct::obj_struct::cost_func_struct cost_func;
+                cost_func.moc.price = Eigen::VectorXd(4);
+                cost_func.moc.quantity = Eigen::VectorXd(4);
+                cost_func.moc.obj = Eigen::VectorXd::Zero(4);
+
+                cost_func.moc.price << -std::numeric_limits<double>::infinity(), 0., 0., std::numeric_limits<double>::infinity();
+                cost_func.moc.quantity << -current_limit, -current_limit, current_limit, current_limit;
+
+                this->obj.cost_funcs[var_ID] = cost_func;
             }
         }
 
@@ -323,8 +282,7 @@ namespace ADMM{
             // Ax = c
             // A(mx' + x_0) = c
             // [A][m]x' = c - A * x_0
-            this->solver.constraint.boundary_0 = -Mat * this->obj.transformation.shift;
-            this->solver.constraint.boundary = this->solver.constraint.boundary_0;
+            this->solver.constraint.boundary = -Mat * this->obj.transformation.shift;
 
             // Apply transformation to the matrix
             Eigen::MatrixXd Diag = Eigen::MatrixXd::Zero(this->statistic.num_variable, this->statistic.num_variable);
