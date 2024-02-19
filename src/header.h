@@ -404,30 +404,107 @@ namespace ADMM{
                     // Check non-zero entries in PSD (for prime variables minimization)
                     this->solver.locals[node_iter].infos.variables[var_iter].prime.neighbor.reserve(num_var_temp);
                     this->solver.locals[node_iter].infos.variables[var_iter].prime.outside.reserve(this->statistic.num_variable);
-                    int counter_var = 0;
-                    int var_ID_temp = this->solver.locals[node_iter].ID.variable[counter_var];
+
                     for(int col_iter = 0; col_iter < this->solver.constraint.PSD_main.row[var_ID].size(); ++ col_iter){
                         auto pair_temp = this->solver.constraint.PSD_main.row[var_ID][col_iter];
-                        int col_ID = pair_temp.first;
-                        double coeff = pair_temp.second;
 
-                        if(col_ID == var_ID_temp){
-                            if(col_ID == var_ID){
-                                this->solver.locals[node_iter].infos.variables[var_iter].prime.self = coeff;
-                            }
-                            else{
-                                this->solver.locals[node_iter].infos.variables[var_iter].prime.neighbor.push_back(pair_temp);
-                            }
+                        bool break_flag = 0;
+                        int var_temp_now = 0;
+                        for(int var_temp_iter = var_temp_now; var_temp_iter < num_var_temp; ++ var_temp_iter){
+                            int col_ID = pair_temp.first;
+                            int var_ID_temp = this->solver.locals[node_iter].ID.variable[var_temp_iter];
 
-                            counter_var += 1;
-                            if(counter_var < this->solver.locals[node_iter].ID.variable.size()){
-                                var_ID_temp = this->solver.locals[node_iter].ID.variable[counter_var];
+                            if(col_ID == var_ID_temp){
+                                if(col_ID == var_ID){
+                                    double coeff = pair_temp.second;
+                                    this->solver.locals[node_iter].infos.variables[var_iter].prime.self = coeff;
+                                }
+                                else{
+                                    this->solver.locals[node_iter].infos.variables[var_iter].prime.neighbor.push_back(pair_temp);
+                                }
+
+                                var_temp_now = var_temp_iter + 1;
+
+                                break_flag = 1;
+                                break;
                             }
                         }
-                        else{
+
+                        // No break occur in 2nd loop = outside
+                        if(!break_flag){
                             this->solver.locals[node_iter].infos.variables[var_iter].prime.outside.push_back(pair_temp);
                         }
                     }
+
+//                    int counter_0 = 0;
+//                    int counter_1 = 0;
+//                    bool loop_flag = counter_0 < this->solver.constraint.PSD_main.row[var_ID].size();
+//                    loop_flag *= counter_1 < this->solver.locals[node_iter].ID.variable.size();
+//                    bool add_flag = 0;
+//                    while(loop_flag){
+//                        int col_ID = this->solver.constraint.PSD_main.row[var_ID][counter_0].first;
+//                        int var_ID_temp = this->solver.locals[node_iter].ID.variable[counter_1];
+//                        auto pair_temp = this->solver.constraint.PSD_main.row[var_ID][counter_0];
+//
+//                        if(col_ID == var_ID_temp){
+//                            if(col_ID == var_ID){
+//                                double coeff = pair_temp.second;
+//                                this->solver.locals[node_iter].infos.variables[var_iter].prime.self = coeff;
+//                            }
+//                            else{
+//                                this->solver.locals[node_iter].infos.variables[var_iter].prime.neighbor.push_back(pair_temp);
+//                            }
+//
+//                            counter_0 += 1;
+//                            counter_1 += 1;
+//                        }
+//                        else{
+//                            this->solver.locals[node_iter].infos.variables[var_iter].prime.outside.push_back(pair_temp);
+//
+//                            if(col_ID < var_ID_temp){
+//                                counter_0 += 1;
+//                                add_flag = 0;
+//                            }
+//                            else{
+//                                counter_1 += 1;
+//                                add_flag = 1;
+//                            }
+//                        }
+//
+//                        loop_flag = counter_0 < this->solver.constraint.PSD_main.row[var_ID].size();
+//                        loop_flag *= counter_1 < this->solver.locals[node_iter].ID.variable.size();
+//                    }
+//                    for(int col_iter = counter_0 + add_flag; col_iter < this->solver.constraint.PSD_main.row[var_ID].size(); ++ col_iter){
+//                        auto pair_temp = this->solver.constraint.PSD_main.row[var_ID][col_iter];
+//                        this->solver.locals[node_iter].infos.variables[var_iter].prime.outside.push_back(pair_temp);
+//                    }
+
+
+
+//                    int counter_var = 0;
+//                    int var_ID_temp = this->solver.locals[node_iter].ID.variable[counter_var];
+//                    for(int col_iter = 0; col_iter < this->solver.constraint.PSD_main.row[var_ID].size(); ++ col_iter){
+//                        auto pair_temp = this->solver.constraint.PSD_main.row[var_ID][col_iter];
+//                        int col_ID = pair_temp.first;
+//                        double coeff = pair_temp.second;
+//
+//                        if(col_ID == var_ID_temp){
+//                            if(col_ID == var_ID){
+//                                this->solver.locals[node_iter].infos.variables[var_iter].prime.self = coeff;
+//                            }
+//                            else{
+//                                this->solver.locals[node_iter].infos.variables[var_iter].prime.neighbor.push_back(pair_temp);
+//                            }
+//
+//                            counter_var += 1;
+//                            if(counter_var < this->solver.locals[node_iter].ID.variable.size()){
+//                                var_ID_temp = this->solver.locals[node_iter].ID.variable[counter_var];
+//                            }
+//                        }
+//                        else{
+//                            this->solver.locals[node_iter].infos.variables[var_iter].prime.outside.push_back(pair_temp);
+//                        }
+//                    }
 
                     // Check non-zero entries in transpose of main (for prime variables minimization)
                     this->solver.locals[node_iter].infos.variables[var_iter].dual.neighbor.reserve(num_constr_temp);
@@ -510,8 +587,19 @@ namespace ADMM{
                     std::cout << "Prime:\n";
                     std::cout << "Self:\t" << this->solver.locals[node_iter].infos.variables[var_iter].prime.self << "\n";
 
+                    std::cout << "Neighbor:\t";
+                    for(int prime_iter = 0; prime_iter < this->solver.locals[node_iter].infos.variables[var_iter].prime.neighbor.size(); ++ prime_iter){
+                        std::cout << "(" << this->solver.locals[node_iter].infos.variables[var_iter].prime.neighbor[prime_iter].first << ", " << this->solver.locals[node_iter].infos.variables[var_iter].prime.neighbor[prime_iter].second << ")\t";
+                    }
+                    std::cout << "\n";
+
+                    std::cout << "Outside:\t";
+                    for(int prime_iter = 0; prime_iter < this->solver.locals[node_iter].infos.variables[var_iter].prime.outside.size(); ++ prime_iter){
+                        std::cout << "(" << this->solver.locals[node_iter].infos.variables[var_iter].prime.outside[prime_iter].first << ", " << this->solver.locals[node_iter].infos.variables[var_iter].prime.outside[prime_iter].second << ")\t";
+                    }
                     std::cout << "\n";
                 }
+                std::cout << "\n";
 
                 std::cout << "Constraints:\n";
                 std::cout << "ID:\t";
