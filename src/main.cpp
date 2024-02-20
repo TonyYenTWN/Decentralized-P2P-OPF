@@ -14,7 +14,7 @@ int main()
 
     ADMM::opf_struct opf;
     radial_line_problem_set(opf, num_node, num_price, y_l, theta_limit, I_limit, total_load);
-    opf.print_node_infos();
+    opf.solve_root(1E-6, 1E-6, 1);
 
     return 0;
 }

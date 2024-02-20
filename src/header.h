@@ -84,6 +84,20 @@ namespace ADMM{
 
             return Mat;
         }
+
+        Eigen::VectorXd col_vec_prod(Eigen::VectorXd vec){
+            Eigen::VectorXd prod = Eigen::VectorXd::Zero(vec.size());
+
+            for(int row_iter = 0; row_iter < this->row.size(); ++ row_iter){
+                for(int entry_iter = 0; entry_iter < this->row[row_iter].size(); ++ entry_iter){
+                    int col_ID = this->row[row_iter][entry_iter].first;
+                    double coeff = this->row[row_iter][entry_iter].second;
+                    prod(row_iter) += coeff * vec(col_ID);
+                }
+            }
+
+            return prod;
+        }
     };
 
     struct opf_struct{
@@ -213,6 +227,7 @@ namespace ADMM{
             };
             constraint_struct constraint;
 
+            // Infomation at each local (nodal) optimizer
             struct local_struct{
                 struct ID_struct{
                     std::vector <int> variable;
@@ -237,6 +252,24 @@ namespace ADMM{
                 informations_struct infos;
             };
             std::vector <local_struct> locals;
+
+            // Solution
+            struct sol_struct{
+                struct value_struct{
+                    struct variable_struct{
+                        Eigen::VectorXd now;
+                        Eigen::VectorXd prev;
+                    };
+                    variable_struct variables;
+                    Eigen::VectorXd price_margin;
+                    Eigen::VectorXd error;
+                };
+
+                value_struct prime;
+                value_struct dual;
+                double obj_value;
+            };
+            sol_struct sol;
         };
         solver_struct solver;
 
@@ -356,6 +389,12 @@ namespace ADMM{
                     this->solver.constraint.Mat_main.col[col_ID].push_back(std::pair <int, double> (row_ID, coeff));
                 }
             }
+
+            // Set boundary for equality constraints; transformation considered
+            // Ax = c
+            // A(mx' + x_0) = c
+            // [A][m]x' = c - A * x_0
+            this->solver.constraint.boundary = this->solver.constraint.Mat_main.col_vec_prod(-this->obj.transformation.shift);
 
             // Rescale Main Matrix
             this->solver.constraint.Mat_main.rescale(this->obj.transformation.scale);
@@ -496,27 +535,6 @@ namespace ADMM{
                             this->solver.locals[node_iter].infos.constraints[constr_iter].prime.outside.push_back(pair_temp);
                         }
                     }
-
-
-//                    int counter = 0;
-//                    int var_ID_temp = this->solver.locals[node_iter].ID.variable[counter];
-//                    for(int col_iter = 0; col_iter < this->solver.constraint.Mat_main.row[constr_ID].size(); ++ col_iter){
-//                        auto pair_temp = this->solver.constraint.Mat_main.row[constr_ID][col_iter];
-//                        int col_ID = pair_temp.first;
-//                        double coeff = pair_temp.second;
-//
-//                        if(col_ID == var_ID_temp){
-//                            this->solver.locals[node_iter].infos.constraints[constr_iter].prime.neighbor.push_back(pair_temp);
-//
-//                            counter += 1;
-//                            if(counter < this->solver.locals[node_iter].ID.variable.size()){
-//                                var_ID_temp = this->solver.locals[node_iter].ID.variable[counter];
-//                            }
-//                        }
-//                        else{
-//                            this->solver.locals[node_iter].infos.constraints[constr_iter].prime.outside.push_back(pair_temp);
-//                        }
-//                    }
                 }
             }
         }
@@ -596,7 +614,137 @@ namespace ADMM{
                     }
                     std::cout << "\n\n";
                 }
+            }
+        }
 
+        // Price gap set (rho must be fixed!!)
+        void price_gap_set(double rho){
+            for(int node_iter = 0; node_iter < this->statistic.num_node; ++ node_iter){
+                for(int var_iter = 0; var_iter < this->solver.locals[node_iter].ID.variable.size(); ++ var_iter){
+                    int var_ID = this->solver.locals[node_iter].ID.variable[var_iter];
+                    double coeff = this->solver.locals[node_iter].infos.variables[var_iter].prime.self;
+
+                    this->obj.cost_funcs[var_ID].moc.gap = this->obj.cost_funcs[var_ID].moc.price / rho;
+                    this->obj.cost_funcs[var_ID].moc.gap += coeff * this->obj.cost_funcs[var_ID].moc.quantity;
+                }
+            }
+        }
+
+        void solve_root(double tol_prime, double tol_dual, bool print_flag = 1){
+            // Initialization
+            double rho = 1.;
+            double omega = 1.;
+            double alpha = 1.;
+            this->solver.sol.prime.variables.prev = Eigen::VectorXd::Zero(this->statistic.num_variable);
+            this->solver.sol.prime.variables.now = Eigen::VectorXd::Zero(this->statistic.num_variable);
+            this->solver.sol.prime.price_margin = Eigen::VectorXd::Zero(this->statistic.num_variable);
+            this->solver.sol.dual.variables.prev = Eigen::VectorXd::Zero(this->statistic.num_constraint);
+            this->solver.sol.dual.variables.now = Eigen::VectorXd::Zero(this->statistic.num_constraint);
+            price_gap_set(rho);
+
+            // Main loop
+            // f(x) + .5 * rho * ||A %*% x - c + u||^2
+            // f(x) + .5 * rho * (M_{ij} x_i x_j + 2 * A_{ij} b_i x_j + ...)
+            // KKT: p_i + rho * (M_{ij} x_j + t(A)_{ij} b_j) = 0
+            int loop = 0;
+            while(true){
+                // Local optimizer
+                for(int node_iter = 0; node_iter < this->statistic.num_node; ++ node_iter){
+                    int num_var_temp = this->solver.locals[node_iter].ID.variable.size();
+                    int num_constr_temp = this->solver.locals[node_iter].ID.constraint.size();
+
+                    // Calculate the constant sums for prime variables
+                    Eigen::VectorXd var_prime_outside_sum = Eigen::VectorXd::Zero(num_var_temp);
+                    Eigen::VectorXd var_dual_outside_sum = Eigen::VectorXd::Zero(num_var_temp);
+                    for(int var_iter = 0; var_iter < num_var_temp; ++ var_iter){
+                        for(int prime_iter = 0; prime_iter < this->solver.locals[node_iter].infos.variables[var_iter].prime.outside.size(); ++ prime_iter){
+                            int var_ID = this->solver.locals[node_iter].infos.variables[var_iter].prime.outside[prime_iter].first;
+                            double coeff = this->solver.locals[node_iter].infos.variables[var_iter].prime.outside[prime_iter].second;
+                            var_prime_outside_sum(var_iter) += coeff * this->solver.sol.prime.variables.prev(var_ID);
+                        }
+
+                        for(int dual_iter = 0; dual_iter < this->solver.locals[node_iter].infos.variables[var_iter].dual.outside.size(); ++ dual_iter){
+                            int constr_ID = this->solver.locals[node_iter].infos.variables[var_iter].dual.outside[dual_iter].first;
+                            double coeff = this->solver.locals[node_iter].infos.variables[var_iter].dual.outside[dual_iter].second;
+                            var_dual_outside_sum(var_iter) += coeff * (this->solver.sol.dual.variables.prev(constr_ID) - this->solver.constraint.boundary(constr_ID));
+                        }
+                    }
+
+                    // Calculate the constant sums for dual variables
+                    Eigen::VectorXd constr_prime_outside_sum = Eigen::VectorXd::Zero(num_constr_temp);
+                    for(int constr_iter = 0; constr_iter < num_constr_temp; ++ constr_iter){
+                        for(int prime_iter = 0; prime_iter < this->solver.locals[node_iter].infos.constraints[constr_iter].prime.outside.size(); ++ prime_iter){
+                            int var_ID = this->solver.locals[node_iter].infos.constraints[constr_iter].prime.outside[prime_iter].first;
+                            double coeff = this->solver.locals[node_iter].infos.constraints[constr_iter].prime.outside[prime_iter].second;
+                            constr_prime_outside_sum(constr_iter) += coeff * this->solver.sol.prime.variables.prev(var_ID);
+                        }
+                    }
+
+                    while(true){
+                        // Optimize prime variables
+                        for(int var_iter = 0; var_iter < num_var_temp; ++ var_iter){
+                            int var_ID = this->solver.locals[node_iter].ID.variable[var_iter];
+
+                            // Find sum of inner product of neighbor and outside terms
+                            double inner_prod = var_prime_outside_sum(var_iter);
+
+                            double var_prime_neighbor_sum = 0.;
+                            for(int prime_iter = 0; prime_iter < this->solver.locals[node_iter].infos.variables[var_iter].prime.neighbor.size(); ++ prime_iter){
+                                auto pair_temp = this->solver.locals[node_iter].infos.variables[var_iter].prime.neighbor[prime_iter];
+                                var_prime_neighbor_sum += pair_temp.second * this->solver.sol.prime.variables.now(pair_temp.first);
+                            }
+
+                            double var_dual_neighbor_sum = 0.;
+                            for(int dual_iter = 0; dual_iter < this->solver.locals[node_iter].infos.variables[var_iter].dual.neighbor.size(); ++ dual_iter){
+                                auto pair_temp = this->solver.locals[node_iter].infos.variables[var_iter].dual.neighbor[dual_iter];
+                                var_dual_neighbor_sum += pair_temp.second * (this->solver.sol.dual.variables.now(pair_temp.first) - this->solver.constraint.boundary(pair_temp.first));
+                            }
+
+                            inner_prod += var_prime_neighbor_sum + var_dual_neighbor_sum;
+
+                            // Bisection method for finding KKT point
+                            Eigen::Vector2i gap_price_ID(0, this->obj.cost_funcs[var_ID].moc.price.size() - 1);
+                            int mid_price_ID = gap_price_ID.sum() / 2;
+                            while(gap_price_ID(1) - gap_price_ID(0) > 1){
+                                Eigen::Vector2d gap_rent;
+                                gap_rent(0) = this->obj.cost_funcs[var_ID].moc.gap(gap_price_ID(0)) + inner_prod;
+                                gap_rent(1) = this->obj.cost_funcs[var_ID].moc.gap(gap_price_ID(1)) + inner_prod;
+
+                                double mid_rent;
+                                mid_rent = this->obj.cost_funcs[var_ID].moc.gap(mid_price_ID) + inner_prod;
+
+                                // Bisection root-search method
+                                if(mid_rent * gap_rent(0) <= 0){
+                                    gap_price_ID(1) = mid_price_ID;
+                                }
+                                else{
+                                    gap_price_ID(0) = mid_price_ID;
+                                }
+
+                                mid_price_ID = gap_price_ID.sum() / 2;
+                            }
+
+                            // Check binding term
+                            double sensitivity = this->solver.locals[node_iter].infos.variables[var_iter].prime.self;
+                            if(gap_price_ID(0) % 2 == 1){
+                                // price fixed case
+                                this->solver.sol.prime.price_margin(var_ID) = this->obj.cost_funcs[var_ID].moc.price(mid_price_ID);
+                                this->solver.sol.prime.variables.now(var_ID) = -this->solver.sol.prime.price_margin(var_ID) / rho;
+                                this->solver.sol.prime.variables.now(var_ID) -= inner_prod;
+                                this->solver.sol.prime.variables.now(var_ID) /= sensitivity;
+                            }
+                            else{
+                                // quantity fixed case
+                                this->solver.sol.prime.variables.now(var_ID) = this->obj.cost_funcs[var_ID].moc.quantity(mid_price_ID);
+                                this->solver.sol.prime.price_margin(var_ID) = -rho * (sensitivity * this->obj.cost_funcs[var_ID].moc.quantity(mid_price_ID) + inner_prod);
+                            }
+                        }
+
+                        break;
+                    }
+                }
+
+                break;
             }
         }
     };
