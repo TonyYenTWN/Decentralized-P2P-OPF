@@ -156,7 +156,9 @@ namespace ADMM{
                 struct value_struct{
                     struct variable_struct{
                         Eigen::VectorXd now;
-                        Eigen::VectorXd prev;
+                        Eigen::VectorXd prev_0;
+                        Eigen::VectorXd prev_1;
+                        Eigen::VectorXd predict;
                     };
                     variable_struct variables;
                     Eigen::VectorXd price_margin;
@@ -432,11 +434,12 @@ namespace ADMM{
             // Initialization
             double rho = 1.;
             double omega = 1.;
-            double alpha = 1.;
-            this->solver.sol.prime.variables.prev = Eigen::VectorXd::Zero(this->statistic.num_variable);
+            double accel = 1.01;
+            this->solver.sol.prime.variables.prev_0 = Eigen::VectorXd::Zero(this->statistic.num_variable);
+            this->solver.sol.prime.variables.prev_1 = Eigen::VectorXd::Zero(this->statistic.num_variable);
             this->solver.sol.prime.variables.now = Eigen::VectorXd::Zero(this->statistic.num_variable);
+            this->solver.sol.prime.variables.predict = Eigen::VectorXd::Zero(this->statistic.num_variable);
             this->solver.sol.prime.price_margin = Eigen::VectorXd::Zero(this->statistic.num_variable);
-            this->solver.sol.dual.variables.prev = Eigen::VectorXd::Zero(this->statistic.num_constraint);
             this->solver.sol.dual.variables.now = Eigen::VectorXd::Zero(this->statistic.num_constraint);
             price_gap_set(rho);
 
@@ -445,15 +448,23 @@ namespace ADMM{
             // f(x) + .5 * rho * (M_{ij} x_i x_j + 2 * A_{ij} b_i x_j + ...)
             // KKT: p_i + rho * (M_{ij} x_j + t(A)_{ij} b_j) = 0
             int loop = 0;
+            int sub_loop_max = (int) pow(10., 2. * log(this->statistic.num_node) / log(10.));
             while(true){
                 // Update prime variables and associate prices
                 int sub_loop = 0;
                 while(true){
-                    solve_iteration_subproblem(rho, this->solver.sol.prime.variables.now, this->solver.sol.dual.variables.now);
+                    solve_iteration_subproblem(rho, this->solver.sol.prime.variables.predict, this->solver.sol.dual.variables.now);
 
                     // Stabilization weight for x update
-                    this->solver.sol.prime.variables.now = omega * this->solver.sol.prime.variables.now + (1. - omega) * this->solver.sol.prime.variables.prev;
-                    this->solver.sol.prime.variables.prev = this->solver.sol.prime.variables.now;
+                    this->solver.sol.prime.variables.now = omega * this->solver.sol.prime.variables.predict + (1. - omega) * this->solver.sol.prime.variables.prev_1;
+                    this->solver.sol.prime.variables.predict = 2 * this->solver.sol.prime.variables.now;
+                    this->solver.sol.prime.variables.predict -= this->solver.sol.prime.variables.prev_1;
+//                    this->solver.sol.prime.variables.predict = this->solver.sol.prime.variables.now;
+//                    this->solver.sol.prime.variables.predict += 2 * (this->solver.sol.prime.variables.now - this->solver.sol.prime.variables.prev_1);
+//                    this->solver.sol.prime.variables.predict -= this->solver.sol.prime.variables.prev_1 - this->solver.sol.prime.variables.prev_0;
+                    this->solver.sol.prime.variables.predict = this->solver.sol.prime.variables.now + (this->solver.sol.prime.variables.predict - this->solver.sol.prime.variables.now) / accel;
+                    this->solver.sol.prime.variables.prev_1 = this->solver.sol.prime.variables.now; // Wrong order yields better result?!
+                    this->solver.sol.prime.variables.prev_0 = this->solver.sol.prime.variables.prev_1;
 
                     // Check convergence for subproblem
                     double tol_sub = exp(-loop);
@@ -467,11 +478,14 @@ namespace ADMM{
                     }
 
                     sub_loop += 1;
+                    if(sub_loop > sub_loop_max){
+                        break;
+                    }
                 }
 
                 // Update dual variables
                 // u <- u + alpha * (A %*% x - c)
-                this->solver.sol.dual.variables.now += alpha * (this->solver.constraint.Matrix_main * this->solver.sol.prime.variables.now - this->solver.constraint.boundary);
+                this->solver.sol.dual.variables.now += this->solver.constraint.Matrix_main * this->solver.sol.prime.variables.now - this->solver.constraint.boundary;
 
                 // Check convergence for whole problem
                 this->solver.sol.prime.error = this->solver.constraint.Matrix_main * this->solver.sol.prime.variables.now - this->solver.constraint.boundary;
@@ -487,7 +501,7 @@ namespace ADMM{
 
                 // Print progress
                 if(print_flag){
-                    int sys_show = (int) 7. - log(this->statistic.num_variable) / log(10.);
+                    int sys_show = (int) 4. - log(this->statistic.num_variable) / log(10.);
                     sys_show = std::max(sys_show, 0);
                     if(loop % (int) pow(10., sys_show) == 0){
                         std::cout << "Loop:\t" << loop << "\n";

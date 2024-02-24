@@ -1,12 +1,12 @@
-// Decentralized optimization using ADMM, relaxed constraints
+// Decentralized optimization using ADMM, relaxed constraints, acceleration
 // DC Power Flow Assumption, ignoring reactive power flow
 
 #include "header.h"
 
 int main()
 {
-    int num_node = 80;
-    int num_price = 10;
+    int num_node = 220;
+    int num_price = 150;
     std::complex<double> y_l (0., 1.);
     double theta_limit = ADMM::pi() / 6.;
     double I_limit = 2.;
