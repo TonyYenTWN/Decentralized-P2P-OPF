@@ -393,6 +393,41 @@ namespace ADMM{
             }
         }
 
+        // Calculate objective value
+        void get_obj(){
+            this->solver.sol.obj_value = 0.;
+            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
+                // Bisection method for finding location of solution
+                Eigen::Vector2i gap_price_ID(0, this->obj.cost_funcs[var_iter].moc.price.size() - 1);
+                int mid_price_ID = gap_price_ID.sum() / 2;
+                Eigen::Vector2d gap_rent;
+                while(gap_price_ID(1) - gap_price_ID(0) > 1){
+                    gap_rent(0) = this->obj.cost_funcs[var_iter].moc.quantity(gap_price_ID(0)) - this->solver.sol.prime.variables.now(var_iter);
+                    gap_rent(1) = this->obj.cost_funcs[var_iter].moc.quantity(gap_price_ID(1)) - this->solver.sol.prime.variables.now(var_iter);
+
+                    double mid_rent;
+                    mid_rent = this->obj.cost_funcs[var_iter].moc.quantity(mid_price_ID) - this->solver.sol.prime.variables.now(var_iter);
+
+                    // Bisection root-search method
+                    if(mid_rent * gap_rent(0) <= 0){
+                        gap_price_ID(1) = mid_price_ID;
+                    }
+                    else{
+                        gap_price_ID(0) = mid_price_ID;
+                    }
+
+                    mid_price_ID = gap_price_ID.sum() / 2;
+                }
+
+                double obj_temp = 0.;
+                obj_temp += this->obj.cost_funcs[var_iter].moc.obj(gap_price_ID(0)) * gap_rent(1);
+                obj_temp -= this->obj.cost_funcs[var_iter].moc.obj(gap_price_ID(1)) * gap_rent(0);
+                obj_temp /= gap_rent(1) - gap_rent(0);
+
+                this->solver.sol.obj_value += obj_temp;
+            }
+        }
+
         void solve_root(double tol_prime, double tol_dual, bool print_flag = 1){
             // Initialization
             double rho = 1.;
@@ -465,37 +500,7 @@ namespace ADMM{
             }
 
             // Calculate objective value
-            this->solver.sol.obj_value = 0.;
-            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
-                // Bisection method for finding location of solution
-                Eigen::Vector2i gap_price_ID(0, this->obj.cost_funcs[var_iter].moc.price.size() - 1);
-                int mid_price_ID = gap_price_ID.sum() / 2;
-                Eigen::Vector2d gap_rent;
-                while(gap_price_ID(1) - gap_price_ID(0) > 1){
-                    gap_rent(0) = this->obj.cost_funcs[var_iter].moc.quantity(gap_price_ID(0)) - this->solver.sol.prime.variables.now(var_iter);
-                    gap_rent(1) = this->obj.cost_funcs[var_iter].moc.quantity(gap_price_ID(1)) - this->solver.sol.prime.variables.now(var_iter);
-
-                    double mid_rent;
-                    mid_rent = this->obj.cost_funcs[var_iter].moc.quantity(mid_price_ID) - this->solver.sol.prime.variables.now(var_iter);
-
-                    // Bisection root-search method
-                    if(mid_rent * gap_rent(0) <= 0){
-                        gap_price_ID(1) = mid_price_ID;
-                    }
-                    else{
-                        gap_price_ID(0) = mid_price_ID;
-                    }
-
-                    mid_price_ID = gap_price_ID.sum() / 2;
-                }
-
-                double obj_temp = 0.;
-                obj_temp += this->obj.cost_funcs[var_iter].moc.obj(gap_price_ID(0)) * gap_rent(1);
-                obj_temp -= this->obj.cost_funcs[var_iter].moc.obj(gap_price_ID(1)) * gap_rent(0);
-                obj_temp /= gap_rent(1) - gap_rent(0);
-
-                this->solver.sol.obj_value += obj_temp;
-            }
+            get_obj();
 
             if(print_flag){
                 std::cout << "Total loop:\t" << loop << "\n";
