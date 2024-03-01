@@ -43,12 +43,12 @@ moc_create <- function(bid_demand, bid_supply, M){
 }
 
 ### Network Parameters
-num_node <- 4
+num_node <- 12
 num_line <- num_node - 1
 z_img <- 1 / num_line
 Cond = diag(rep(1 / z_img, num_line))
-V_limit <- pi / 6
-I_limit <- 1.2
+V_limit <- pi / 12
+I_limit <- 2
 
 ## Topology of the network
 Topology = matrix(nrow = num_line, ncol = 2)
