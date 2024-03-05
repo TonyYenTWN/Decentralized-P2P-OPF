@@ -27,7 +27,7 @@ namespace ADMM{
         opf.obj.cost_funcs[0].demand.price = Eigen::VectorXd(2);
         opf.obj.cost_funcs[0].demand.quantity = Eigen::VectorXd::Zero(2);
         opf.obj.cost_funcs[0].demand.price << -std::numeric_limits<double>::infinity(), std::numeric_limits<double>::infinity();
-        opf.obj.cost_funcs[0].moc_set(opf.obj.price_range);
+        opf.obj.cost_funcs[0].moc_set();
 
         // Other nodes are sink nodes
         double node_load = total_load / (num_node - 1) / num_price;
@@ -44,7 +44,7 @@ namespace ADMM{
             opf.obj.cost_funcs[node_iter].demand.quantity << 0., node_load * Eigen::VectorXd::Ones(num_price), 0.;
 
             // Set merit order curve for residual load
-            opf.obj.cost_funcs[node_iter].moc_set(opf.obj.price_range);
+            opf.obj.cost_funcs[node_iter].moc_set();
         }
 
         // Set solver

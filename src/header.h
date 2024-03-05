@@ -89,14 +89,11 @@ namespace ADMM{
                 moc_struct moc;
 
                 // Function to set merit order curve
-                void moc_set(Eigen::Vector2d price_range){
+                void moc_set(){
                     int num_row = 2 * (this->demand.price.size() + this->supply.price.size() - 3);
                     auto price_vec = Eigen::VectorXd(num_row);
                     auto quantity_vec = Eigen::VectorXd(num_row);
                     auto obj_vec = Eigen::VectorXd(num_row);
-                    this->moc.price = Eigen::VectorXd(num_row + 2);
-                    this->moc.quantity = Eigen::VectorXd(num_row + 2);
-                    this->moc.obj = Eigen::VectorXd(num_row + 2);
 
                     // Initialization for the loop
                     int price_demand_ID = 0;
@@ -105,7 +102,7 @@ namespace ADMM{
                     double obj_value = -(this->demand.price.segment(1, this->demand.price.size() - 2).array() * this->demand.quantity.segment(1, this->demand.quantity.size() - 2).array()).sum();
 
                     // First item when price = price_min
-                    price_vec(0) = price_range(0);
+                    price_vec(0) = -std::numeric_limits<double>::infinity();
                     quantity_vec(0) = -this->demand.quantity.sum();
                     obj_vec(0) = obj_value;
 
@@ -142,27 +139,18 @@ namespace ADMM{
 
                     // Last item when price = max
                     price_ID += 1;
-                    price_vec(price_ID) = price_range(1);
+                    price_vec(price_ID) = std::numeric_limits<double>::infinity();
                     quantity_vec(price_ID) = quantity_vec(price_ID - 1);
                     obj_vec(price_ID) = obj_value;
 
                     // Extend the domain to (-inf, inf)
-                    this->moc.price << price_range(0), price_vec, price_range(1);
-                    this->moc.quantity << -std::numeric_limits<double>::infinity(), quantity_vec, std::numeric_limits<double>::infinity();
-                    this->moc.obj << std::numeric_limits<double>::infinity(), obj_vec, std::numeric_limits<double>::infinity();
+                    this->moc.price = price_vec;
+                    this->moc.quantity = quantity_vec;
+                    this->moc.obj = obj_vec;
                 }
             };
 
-            struct transform_struct{
-                Eigen::VectorXd scale;
-                Eigen::VectorXd shift;
-                double obj;
-            };
-            transform_struct transformation;
-
             std::vector <cost_func_struct> cost_funcs;
-
-            Eigen::Vector2d price_range;
         };
         obj_struct obj;
 
@@ -229,17 +217,14 @@ namespace ADMM{
             // Line current boundaries
             for(int line_iter = 0; line_iter < this->statistic.num_line; ++ line_iter){
                 int var_ID = this->statistic.num_node + line_iter;
-                double price_range = this->obj.price_range(1) - this->obj.price_range(0);
 
                 opf_struct::obj_struct::cost_func_struct cost_func;
-                cost_func.moc.price = Eigen::VectorXd(6);
-                cost_func.moc.quantity = Eigen::VectorXd(6);
-                cost_func.moc.obj = Eigen::VectorXd::Zero(6);
+                cost_func.moc.price = Eigen::VectorXd(4);
+                cost_func.moc.quantity = Eigen::VectorXd(4);
+                cost_func.moc.obj = Eigen::VectorXd::Zero(4);
 
-                cost_func.moc.price << -price_range, -price_range, 0., 0., price_range, price_range;
-                cost_func.moc.quantity << -std::numeric_limits<double>::infinity(), -current_limit, -current_limit, current_limit, current_limit, std::numeric_limits<double>::infinity();
-                cost_func.moc.obj(0) = std::numeric_limits<double>::infinity();
-                cost_func.moc.obj(5) = std::numeric_limits<double>::infinity();
+                cost_func.moc.price << -std::numeric_limits<double>::infinity(), 0., 0., std::numeric_limits<double>::infinity();
+                cost_func.moc.quantity << -current_limit, -current_limit, current_limit, current_limit;
 
                 this->obj.cost_funcs[var_ID] = cost_func;
             }
@@ -294,15 +279,126 @@ namespace ADMM{
             this->solver.constraint.PSD_terms.read_from_Dense(PSD);
         }
 
+        // Calculate objective value
+        void get_obj(){
+            this->solver.sol.obj_value = 0.;
+            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
+                // Bisection method for finding location of solution
+                int quan_min_ID = 0;
+                int quan_max_ID = this->obj.cost_funcs[var_iter].moc.price.size() - 1;
+                Eigen::Vector2i gap_price_ID(quan_min_ID, quan_max_ID);
+                int mid_price_ID = gap_price_ID.sum() / 2;
+                Eigen::Vector2d gap_rent;
+                while(gap_price_ID(1) - gap_price_ID(0) > 1){
+                    gap_rent(0) = this->obj.cost_funcs[var_iter].moc.quantity(gap_price_ID(0)) - this->solver.sol.variable.value.now(var_iter);
+                    gap_rent(1) = this->obj.cost_funcs[var_iter].moc.quantity(gap_price_ID(1)) - this->solver.sol.variable.value.now(var_iter);
+
+                    double mid_rent;
+                    mid_rent = this->obj.cost_funcs[var_iter].moc.quantity(mid_price_ID) - this->solver.sol.variable.value.now(var_iter);
+
+                    // Bisection root-search method
+                    if(mid_rent * gap_rent(0) <= 0){
+                        gap_price_ID(1) = mid_price_ID;
+                    }
+                    else{
+                        gap_price_ID(0) = mid_price_ID;
+                    }
+
+                    mid_price_ID = gap_price_ID.sum() / 2;
+                }
+
+                double obj_temp = 0.;
+                obj_temp += this->obj.cost_funcs[var_iter].moc.obj(gap_price_ID(0)) * gap_rent(1);
+                obj_temp -= this->obj.cost_funcs[var_iter].moc.obj(gap_price_ID(1)) * gap_rent(0);
+                obj_temp /= gap_rent(1) - gap_rent(0);
+
+                this->solver.sol.obj_value += obj_temp;
+            }
+        }
+
+        // Subsolver for price
+        // DP: min g*(z) - <z - z_{t - 1}, A %*% (2 * x_t - x_{t - 1})> + .5 * ||z - z_{t - 1}||^2_{M_2}
+        // KKT: q(z) - A %*% (2 * x_t - x_{t - 1}) + 1 / rho * A %*% A^T %*% (z - z_{t - 1}) = 0
+        void solve_iteration_subproblem(double rho){
+            for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
+                double inner_prod = 0.;
+
+                // add from PSD
+                int entry_iter = 0;
+                while(entry_iter < this->solver.constraint.PSD_terms.row[var_iter].size()){
+                    auto pair_temp = this->solver.constraint.PSD_terms.row[var_iter][entry_iter];
+                    if(pair_temp.first != var_iter){
+                        inner_prod += pair_temp.second * this->solver.sol.price.value.now(pair_temp.first);
+                    }
+                    inner_prod -= pair_temp.second * this->solver.sol.price.value.prev(pair_temp.first);
+                    entry_iter += 1;
+                }
+
+                inner_prod /= rho;
+                inner_prod -= 2 * this->solver.sol.variable.value.now(var_iter) - this->solver.sol.variable.value.prev(var_iter);
+
+                // Bisection method for finding KKT point
+                int quan_min_ID = 0;
+                int quan_max_ID = this->obj.cost_funcs[var_iter].moc.price.size() - 1;
+                Eigen::Vector2i gap_price_ID(quan_min_ID, quan_max_ID);
+                int mid_price_ID = gap_price_ID.sum() / 2;
+                while(gap_price_ID(1) - gap_price_ID(0) > 1){
+                    Eigen::Vector2d gap_rent;
+                    gap_rent(0) = this->obj.cost_funcs[var_iter].moc.price(gap_price_ID(0));
+                    gap_rent(0) *= this->solver.constraint.sensitivity_var(var_iter) / rho;
+                    gap_rent(0) += this->obj.cost_funcs[var_iter].moc.quantity(gap_price_ID(0));
+                    gap_rent(0) += inner_prod;
+                    gap_rent(1) = this->obj.cost_funcs[var_iter].moc.price(gap_price_ID(1));
+                    gap_rent(1) *= this->solver.constraint.sensitivity_var(var_iter) / rho;
+                    gap_rent(1) += this->obj.cost_funcs[var_iter].moc.quantity(gap_price_ID(1));
+                    gap_rent(1) += inner_prod;
+
+                    double mid_rent;
+                    mid_rent = this->obj.cost_funcs[var_iter].moc.price(mid_price_ID);
+                    mid_rent *= this->solver.constraint.sensitivity_var(var_iter) / rho;
+                    mid_rent += this->obj.cost_funcs[var_iter].moc.quantity(mid_price_ID);
+                    mid_rent += inner_prod;
+
+                    // Bisection root-search method
+                    if(mid_rent * gap_rent(0) <= 0){
+                        gap_price_ID(1) = mid_price_ID;
+                    }
+                    else{
+                        gap_price_ID(0) = mid_price_ID;
+                    }
+
+                    mid_price_ID = gap_price_ID.sum() / 2;
+                }
+
+                // Check binding term
+                if(gap_price_ID(0) % 2 == 1){
+                    // price fixed case
+                    this->solver.sol.price.value.now(var_iter) = this->obj.cost_funcs[var_iter].moc.price(mid_price_ID);
+                    this->solver.sol.price.grad_margin(var_iter) = -this->solver.sol.price.value.now(var_iter);
+                    this->solver.sol.price.grad_margin(var_iter) *= this->solver.constraint.sensitivity_var(var_iter) / rho;
+                    this->solver.sol.price.grad_margin(var_iter) -= inner_prod;
+                }
+                else{
+                    // quantity fixed case
+                    this->solver.sol.price.grad_margin(var_iter) = this->obj.cost_funcs[var_iter].moc.quantity(mid_price_ID);
+                    this->solver.sol.price.value.now(var_iter) = this->obj.cost_funcs[var_iter].moc.quantity(mid_price_ID);
+                    this->solver.sol.price.value.now(var_iter) += inner_prod;
+                    this->solver.sol.price.value.now(var_iter) *= -rho / this->solver.constraint.sensitivity_var(var_iter);
+                }
+            }
+        }
+
+        // Main solver
         void solve_root(double tol_prime, double tol_dual, double theta_limit, bool print_flag = 1){
             // Initialization
-            double rho = 1.;
+            double rho = 100.;
             this->solver.sol.state.value.prev = Eigen::VectorXd::Zero(this->statistic.num_state);
             this->solver.sol.state.value.now = Eigen::VectorXd::Zero(this->statistic.num_state);
             this->solver.sol.variable.value.prev = Eigen::VectorXd::Zero(this->statistic.num_variable);
             this->solver.sol.variable.value.now = Eigen::VectorXd::Zero(this->statistic.num_variable);
             this->solver.sol.price.value.prev = Eigen::VectorXd::Zero(this->statistic.num_variable);
             this->solver.sol.price.value.now = Eigen::VectorXd::Zero(this->statistic.num_variable);
+            this->solver.sol.price.grad_margin = Eigen::VectorXd::Zero(this->statistic.num_variable);
 
             // Main loop
             // PP: min f(x) + <x - x_{t - 1}, A^T * z_{t - 1}> + .5 * || x - x_{t - 1} ||^2_{M_1}
@@ -311,56 +407,6 @@ namespace ADMM{
             // KKT: q(z) - A %*% (2 * x_t - x_{t - 1}) + 1 / rho * A %*% A^T %*% (z - z_{t - 1}) = 0
             int loop = 0;
             while(true){
-                // Update prices
-                for(int var_iter = 0; var_iter < this->statistic.num_variable; ++ var_iter){
-                    double inner_prod = 0.;
-
-                    // add from PSD
-                    int entry_iter = 0;
-                    while(entry_iter < this->solver.constraint.PSD_terms.row[var_iter].size()){
-                        auto pair_temp = this->solver.constraint.PSD_terms.row[var_iter][entry_iter];
-                        if(pair_temp.first != var_iter){
-                            inner_prod += pair_temp.second * this->solver.sol.price.value.now(entry_iter);
-                        }
-                        inner_prod -= pair_temp.second * this->solver.sol.price.value.prev(entry_iter);
-                        entry_iter += 1;
-                    }
-
-                    inner_prod /= rho;
-                    inner_prod -= 2 * this->solver.sol.variable.value.now(var_iter) - this->solver.sol.variable.value.prev(var_iter);
-
-                    // Bisection method for finding KKT point
-                    Eigen::Vector2i gap_price_ID(0, this->obj.cost_funcs[var_iter].moc.price.size() - 1);
-                    int mid_price_ID = gap_price_ID.sum() / 2;
-                    while(gap_price_ID(1) - gap_price_ID(0) > 1){
-                        Eigen::Vector2d gap_rent;
-                        gap_rent(0) = this->obj.cost_funcs[var_iter].moc.price(gap_price_ID(0));
-                        gap_rent(0) *= this->solver.constraint.sensitivity_var(var_iter) / rho;
-                        gap_rent(0) += this->obj.cost_funcs[var_iter].moc.quantity(gap_price_ID(0));
-                        gap_rent(0) += inner_prod;
-                        gap_rent(1) = this->obj.cost_funcs[var_iter].moc.price(gap_price_ID(1));
-                        gap_rent(1) *= this->solver.constraint.sensitivity_var(var_iter) / rho;
-                        gap_rent(1) += this->obj.cost_funcs[var_iter].moc.quantity(gap_price_ID(1));
-                        gap_rent(1) += inner_prod;
-
-                        double mid_rent;
-                        mid_rent = this->obj.cost_funcs[var_iter].moc.price(mid_price_ID);
-                        mid_rent *= this->solver.constraint.sensitivity_var(var_iter) / rho;
-                        mid_rent += this->obj.cost_funcs[var_iter].moc.quantity(mid_price_ID);
-                        mid_rent += inner_prod;
-
-                        // Bisection root-search method
-                        if(mid_rent * gap_rent(0) <= 0){
-                            gap_price_ID(1) = mid_price_ID;
-                        }
-                        else{
-                            gap_price_ID(0) = mid_price_ID;
-                        }
-
-                        mid_price_ID = gap_price_ID.sum() / 2;
-                    }
-                }
-
                 // Update states
                 this->solver.sol.state.value.now -= 1. / rho * this->solver.constraint.Mat_main.transpose() * this->solver.sol.price.value.now;
                 this->solver.sol.state.value.now = this->solver.sol.state.value.now.array().min(theta_limit);
@@ -369,8 +415,78 @@ namespace ADMM{
                 // Update variables
                 this->solver.sol.variable.value.now = this->solver.constraint.Mat_main * this->solver.sol.state.value.now;
 
-                break;
+                // Update prices
+                int sub_loop = 0;
+                while(true){
+                    Eigen::VectorXd price_prev_temp = this->solver.sol.price.value.now;
+                    solve_iteration_subproblem(rho);
+
+                    // Check convergence for subproblem
+                    double tol_sub = 1E-2 * tol_dual;
+                    Eigen::VectorXd dual_error = this->solver.sol.price.value.now - price_prev_temp;
+                    dual_error = this->solver.constraint.PSD_main * dual_error;
+                    dual_error /= rho;
+                    if(dual_error.norm() / this->solver.sol.price.value.now.size() < tol_sub){
+                        break;
+                    }
+
+                    if(sub_loop > -1){
+                        break;
+                    }
+                    sub_loop += 1;
+                }
+
+                // Check convergence for whole problem
+                this->solver.sol.state.error = this->solver.sol.state.value.now - this->solver.sol.state.value.prev;
+                this->solver.sol.price.error = this->solver.constraint.PSD_main * (this->solver.sol.price.value.now - this->solver.sol.price.value.prev);
+                double prime_error_norm = this->solver.sol.state.error.norm() * rho;
+                prime_error_norm /= this->solver.sol.state.error.size();
+                double dual_error_norm = this->solver.sol.price.error.norm() / rho;
+                dual_error_norm /= this->solver.sol.price.error.size();
+                if(prime_error_norm < tol_prime && dual_error_norm < tol_dual){
+                    break;
+                }
+
+                // Update previous values
+                this->solver.sol.state.value.prev = this->solver.sol.state.value.now;
+                this->solver.sol.variable.value.prev = this->solver.sol.variable.value.now;
+                this->solver.sol.price.value.prev = this->solver.sol.price.value.now;
+
+//                // Update rho
+//                double drho = this->solver.sol.state.error.array().abs().maxCoeff();
+//                drho /= this->solver.sol.price.error.array().abs().maxCoeff();
+//                drho = rho * pow(drh)
+//                rho *= pow(drho, .5);
+//                rho = std::max(rho, 1.);
+//                rho = std::min(rho, 1E6);
+
+                // Print progress
+                if(print_flag){
+                    int sys_show = (int) 7. - log(this->statistic.num_variable) / log(10.);
+                    sys_show = std::max(sys_show, 0);
+                    if(loop % (int) pow(10., sys_show) == 0){
+                        std::cout << "Loop:\t" << loop << "\n";
+                        std::cout << "Rho:\t" << rho << "\n";
+                        std::cout << "Prime Error:\t" << prime_error_norm << "\n";
+                        std::cout << "Dual Error:\t" << dual_error_norm << "\n";
+                        std::cout << "\n\n";
+                    }
+                }
+                loop += 1;
             }
+
+            // Calculate objective value
+            get_obj();
+
+            if(print_flag){
+                std::cout << "Total loop:\t" << loop << "\n";
+                std::cout << "Prime Error:\t" << this->solver.sol.state.error.norm() / this->solver.sol.state.error.size() << "\n";
+                std::cout << "Dual Error:\t" << this->solver.sol.price.error.norm() / this->solver.sol.price.error.size() << "\n";
+                std::cout << "Objective value:\t" << this->solver.sol.obj_value << "\n";
+                std::cout << "Solution:\n";
+                std::cout << (this->solver.sol.variable.value.now.head(this->statistic.num_node)).transpose() << "\n";
+                std::cout << "\n";
+           }
         }
     };
 
