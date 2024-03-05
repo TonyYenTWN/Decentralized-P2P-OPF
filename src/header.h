@@ -388,10 +388,8 @@ namespace ADMM{
             }
         }
 
-        // Main solver
-        void solve_root(double tol_prime, double tol_dual, double theta_limit, bool print_flag = 1){
-            // Initialization
-            double rho = 100.;
+        // Solution initialization
+        void solve_ini(){
             this->solver.sol.state.value.prev = Eigen::VectorXd::Zero(this->statistic.num_state);
             this->solver.sol.state.value.now = Eigen::VectorXd::Zero(this->statistic.num_state);
             this->solver.sol.variable.value.prev = Eigen::VectorXd::Zero(this->statistic.num_variable);
@@ -399,7 +397,10 @@ namespace ADMM{
             this->solver.sol.price.value.prev = Eigen::VectorXd::Zero(this->statistic.num_variable);
             this->solver.sol.price.value.now = Eigen::VectorXd::Zero(this->statistic.num_variable);
             this->solver.sol.price.grad_margin = Eigen::VectorXd::Zero(this->statistic.num_variable);
+        }
 
+        // Main solver
+        void solve_root(double tol_prime, double tol_dual, double theta_limit, double rho, int sub_loop_max, bool print_flag = 1){
             // Main loop
             // PP: min f(x) + <x - x_{t - 1}, A^T * z_{t - 1}> + .5 * || x - x_{t - 1} ||^2_{M_1}
             // KKT: p(x) + A^T %*% z_{t - 1} + rho * (x - x_{t - 1}) = 0
@@ -430,10 +431,10 @@ namespace ADMM{
                         break;
                     }
 
-                    if(sub_loop > -1){
+                    sub_loop += 1;
+                    if(sub_loop > sub_loop_max){
                         break;
                     }
-                    sub_loop += 1;
                 }
 
                 // Check convergence for whole problem
@@ -451,14 +452,6 @@ namespace ADMM{
                 this->solver.sol.state.value.prev = this->solver.sol.state.value.now;
                 this->solver.sol.variable.value.prev = this->solver.sol.variable.value.now;
                 this->solver.sol.price.value.prev = this->solver.sol.price.value.now;
-
-//                // Update rho
-//                double drho = this->solver.sol.state.error.array().abs().maxCoeff();
-//                drho /= this->solver.sol.price.error.array().abs().maxCoeff();
-//                drho = rho * pow(drh)
-//                rho *= pow(drho, .5);
-//                rho = std::max(rho, 1.);
-//                rho = std::min(rho, 1E6);
 
                 // Print progress
                 if(print_flag){
@@ -483,7 +476,9 @@ namespace ADMM{
                 std::cout << "Prime Error:\t" << this->solver.sol.state.error.norm() / this->solver.sol.state.error.size() << "\n";
                 std::cout << "Dual Error:\t" << this->solver.sol.price.error.norm() / this->solver.sol.price.error.size() << "\n";
                 std::cout << "Objective value:\t" << this->solver.sol.obj_value << "\n";
-                std::cout << "Solution:\n";
+                std::cout << "Solution (Voltage):\n";
+                std::cout << this->solver.sol.state.value.now.transpose() << "\n";
+                std::cout << "Solution (Nodal source):\n";
                 std::cout << (this->solver.sol.variable.value.now.head(this->statistic.num_node)).transpose() << "\n";
                 std::cout << "\n";
            }
